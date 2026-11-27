@@ -111,7 +111,9 @@ index run writes, and `signature.py` reads the footer under a person's mails
 from the `.eml` files – `footers.py` has every index run read them for the
 people the address book lists and keeps them; `own_contacts.py` keeps the contacts added to the
 address book in the app and what each said before a change – rows in the
-profile's database, never files in an export folder. `mcp_server.py` is
+profile's database, never files in an export folder. `pdf_export.py` sets a
+mail, an appointment or a contact as a PDF to hand on (reportlab, with the
+two DejaVu fonts in `fonts/` embedded – their licence lies beside them). `mcp_server.py` is
 the MCP server; the app's search calls its tools in-process, so what leaves
 over MCP passes `_tool()`, which keeps the answer compact, brief and within a
 budget. Its prompts and case resources sit beside the tools, and the three

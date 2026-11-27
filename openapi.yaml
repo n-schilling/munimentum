@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 15.2.1
+  version: 15.3.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1500,7 +1500,7 @@ paths:
             written by someone else. `HEAD` answers the headers alone.
           headers:
             Content-Disposition:
-              description: "`attachment; filename=\"…\"` for everything but `.html` and `.htm`; the name is the file's, stripped of anything a header or a download folder should not carry."
+              description: "`attachment; filename=\"…\"` for everything but `.html` and `.htm`; the name is the file's, stripped of anything a header or a download folder should not carry; a name beyond ASCII also stands as it is in `filename*=UTF-8''…` (RFC 6266)."
               schema: { type: string }
             Content-Length:
               description: The file's size in bytes.
@@ -2715,6 +2715,47 @@ paths:
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "500": { $ref: "#/components/responses/ServerError" }
 
+  /api/v1/documents/pdf:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetItemPdf
+      x-needs-index: true
+      summary: A mail, an appointment or a contact as a PDF
+      description: |
+        The item set as a PDF to hand on: its facts as a table, its text –
+        a mail's whole text with the quoted history, an HTML mail read as
+        text – and a closing block naming the original file, its SHA-256
+        (both only while the file is at hand) and the moment of the export.
+        A series of appointments is shown as it was set up, and said to be
+        one. A rendering, said as such in the
+        file: no layout, no pictures, attachments by name only; the
+        original stays in the archive. In the language the page speaks.
+      parameters:
+        - $ref: "#/components/parameters/Uid"
+      responses:
+        "200":
+          description: The PDF, offered as a download.
+          headers:
+            Content-Disposition:
+              description: "`attachment; filename=\"…\"` – the item's title with `.pdf`, stripped of anything a header or a download folder should not carry; a title beyond ASCII also stands as it is in `filename*=UTF-8''…` (RFC 6266)."
+              schema: { type: string }
+          content:
+            application/pdf:
+              schema: { type: string, format: binary }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No such item (srv.detail.none), or an item of a kind no PDF is made for – a chat, a file, a board (srv.pdf.kind).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "503":
+          description: No index loaded (srv.noindex).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+
   /api/v1/documents/attachments:
     get:
       tags: [Explore, GET]
@@ -2741,7 +2782,7 @@ paths:
             written by someone else.
           headers:
             Content-Disposition:
-              description: "`attachment; filename=\"…\"` – the attachment's name, stripped of anything a header or a download folder should not carry."
+              description: "`attachment; filename=\"…\"` – the attachment's name, stripped of anything a header or a download folder should not carry; a name beyond ASCII also stands as it is in `filename*=UTF-8''…` (RFC 6266)."
               schema: { type: string }
             Content-Length:
               description: The attachment's size in bytes.

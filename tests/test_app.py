@@ -5568,17 +5568,17 @@ def test_quelldatei_wird_heruntergeladen(sandbox, monkeypatch, name, inhalt, cty
         httpd.server_close()
 
 
-@pytest.mark.parametrize("roh,erwartet", [
-    ('a"b.eml', "a_b.eml"),
-    ("x\r\ny.eml", "x__y.eml"),
-    ("../../etc/passwd", "passwd"),
-    ("", "datei"),
-    ("normal.eml", "normal.eml"),
+@pytest.mark.parametrize("raw, expected", [
+    ('a"b.eml', 'attachment; filename="a_b.eml"'),
+    ("x\r\ny.eml", 'attachment; filename="x__y.eml"'),
+    ("../../etc/passwd", 'attachment; filename=".._.._etc_passwd"'),
+    ("", 'attachment; filename="download"'),
+    ("normal.eml", 'attachment; filename="normal.eml"'),
 ])
-def test_dateiname_im_header_ist_unbedenklich(roh, erwartet):
-    """The name ends up in a header – a quotation mark or a line break in it
-    would let it break apart."""
-    assert app_mod._sicherer_name(roh) == erwartet
+def test_a_download_s_name_cannot_break_the_header(raw, expected):
+    """The name ends up in a header – a quotation mark, a line break or a
+    path in it would let it break apart (api.disposition)."""
+    assert app_mod.disposition(raw) == expected
 
 
 # --------------------------------------------------------------------------
@@ -11903,6 +11903,46 @@ pruefe(lacking.indexOf(esc(t('book.sig.missing'))) > 0 && lacking.indexOf(esc(t(
 // Nothing missing is no section.
 pruefe(signatureMissing({lines: ['x']}) === '' && signatureMissing({lines: ['x'], missing: {}}) === '', 'an empty section');
 console.log('OK');
+""")
+
+
+def test_a_mail_an_appointment_and_a_contact_offer_a_pdf():
+    _in_node(GRUNDZUSTAND + """
+function row(source){ return detailAktionen({uid: source + ':x/y "z".eml:0', source: source, key: 'k'}, 1, null); }
+['outlook', 'kalender', 'kontakte'].forEach(function(source){
+  var html = row(source);
+  pruefe(html.indexOf('<button class="ghost" id="detail-pdf" onclick="itemPdf(&quot;' + source + ':x/y \\\\&quot;z\\\\&quot;.eml:0&quot;)"') > 0 &&
+         html.indexOf(esc(t('search.menu.pdf'))) > 0, source + ': ' + html);
+});
+// A file is itself what one hands on; a chat, a board, a page have no PDF: absent, not greyed.
+['datei', 'teams', 'planner', 'todo', 'pages', 'onenote'].forEach(function(source){
+  pruefe(row(source).indexOf('detail-pdf') < 0, source + ' offers a PDF');
+});
+pruefe(detailAktionen({source: 'outlook', key: 'k'}, 1, null).indexOf('detail-pdf') < 0, 'a PDF without an item to name');
+// While a PDF is under way the button of whatever hit is opened meanwhile waits too.
+PDF_BUSY = true;
+pruefe(row('outlook').indexOf('id="detail-pdf" disabled onclick') > 0, 'a second PDF can be asked for: ' + row('outlook'));
+PDF_BUSY = false;
+// The download's name: as it is from filename*, the plain one otherwise, a fallback without a header.
+var Q = String.fromCharCode(39) + String.fromCharCode(39);      // the two quotes of filename*=UTF-8''…
+pruefe(downloadName('attachment; filename="Angebot _ x.pdf"; filename*=UTF-8' + Q + 'Angebot%20%E2%80%93%20x.pdf', 'item.pdf') ===
+       'Angebot ' + String.fromCharCode(0x2013) + ' x.pdf', 'the name as it is');
+pruefe(downloadName('attachment; filename="Offer.pdf"', 'item.pdf') === 'Offer.pdf' && downloadName('', 'item.pdf') === 'item.pdf' &&
+       downloadName('attachment; filename="a.pdf"; filename*=UTF-8' + Q + '%E0%A4%A', 'item.pdf') === 'a.pdf', 'the fallbacks');
+// A refusal is said by the page, not saved as a file – and the button is free again.
+var said = null, asked = [];
+apiFehler = function(r){ said = r; };
+global.fetch = function(path){
+  asked.push(path);
+  return Promise.resolve({ok: false, status: 503, json: function(){ return Promise.resolve({ok: false, error: {k: 'srv.noindex', v: {}}}); }});
+};
+itemPdf('outlook:a b.eml:0');
+itemPdf('outlook:second click while the first is under way');
+setTimeout(function(){
+  pruefe(asked.length === 1 && asked[0].indexOf('/documents/pdf?uid=outlook%3Aa%20b.eml%3A0') > 0, 'asked: ' + JSON.stringify(asked));
+  pruefe(said && said.error.k === 'srv.noindex' && PDF_BUSY === false, 'the refusal: ' + JSON.stringify(said));
+  console.log('OK');
+}, 20);
 """)
 
 

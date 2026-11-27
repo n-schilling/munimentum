@@ -277,6 +277,12 @@ def test_a_mails_detail_names_its_lines_and_its_attachment(archive_page, archive
     assert "/api/v1/documents/attachments" in chip.get_attribute("href")
     expect(archive_page.locator("#detail .daktionen").get_by_text(
         EN["search.menu.source"])).to_be_visible()
+    # … and the mail itself is one click away as a PDF to hand on.
+    with archive_page.expect_download() as got:
+        archive_page.locator("#detail-pdf").click()
+    assert got.value.suggested_filename.endswith(".pdf")
+    with open(got.value.path(), "rb") as f:
+        assert f.read(5) == b"%PDF-"
 
 
 def test_a_heading_inside_a_chat_message_is_not_the_name_of_the_chat(archive_page, archive):

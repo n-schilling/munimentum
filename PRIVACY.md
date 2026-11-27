@@ -47,10 +47,11 @@ removed by hand, so that a search set to collect automatically does not put
 them back. The contacts you add to the address book in the app are rows in
 the same file – name, mail address, what you typed, the mail signature as last
 read, and what a card said before each change or its removal – and are never
-sent to Microsoft; the addresses and names you set to be ignored there lie beside them, and so do the mail signatures an index run reads for the people the address book lists, each with the time it was read. Two things leave the app's folders, each only when you ask: a
+sent to Microsoft; the addresses and names you set to be ignored there lie beside them, and so do the mail signatures an index run reads for the people the address book lists, each with the time it was read. Three things leave the app's folders, each only when you ask: a
 **case export**, a ZIP of copied originals under the path you chose (your
 Documents folder by default), and the **organization as CSV**, the names and
-titles of colleagues – mail addresses only when you tick them – where your
+titles of colleagues – mail addresses only when you tick them – and a single
+mail, appointment or contact **as a PDF**, both where your
 browser saves downloads. From there on they are yours to move, share or
 delete. The app serves its interface on `127.0.0.1` and is
 not reachable from your network. System notifications are posted locally

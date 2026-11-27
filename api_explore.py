@@ -14,6 +14,7 @@ import detail
 import evidence
 import faelle
 import footers
+import i18n
 import org_csv
 import organization
 import own_contacts
@@ -391,8 +392,69 @@ def anhang(h, _p, q, _data):
     # What lies in a mail was written by someone else: offered as a
     # download under a harmless name, never shown in this origin.
     return api.roh(200, inhalt, ctype, extra={
-        "Content-Disposition": f'attachment; filename="{h.M._sicherer_name(name)}"',
+        "Content-Disposition": api.disposition(name),
         "Content-Security-Policy": "sandbox"})
+
+
+def item_pdf(h, _p, q, _data):
+    """A mail, an appointment or a contact card as a PDF to hand on
+    (pdf_export.py): its facts, its text, and where it comes from – the
+    original's name and checksum. A rendering, said as such; the original
+    stays what it is."""
+    mod = h.app.search.ensure(h.app.cfg)
+    if mod is None:
+        raise Ablehnung(503, h.app.search.error)
+    con = mod._db()
+    try:
+        row, text = mod._message_text(con, q.get("uid", ""))
+    finally:
+        con.close()
+    if row is None:
+        raise Ablehnung(404, "srv.detail.none")
+    import pdf_export                            # reportlab: loaded when a PDF is asked for
+    if row["src"] not in pdf_export.KINDS:
+        raise Ablehnung(404, "srv.pdf.kind")
+    path, _error = mod._resolve_source(row["root"], row["rel"])
+    facts = detail.fakten(row, text, path, mod.STATE)
+    lang = h.app.run_lang()
+
+    def say(key):
+        return i18n.satz(lang, key, h.M.RES) or key
+    title, body = row["title"] or "", facts.get("text") or ""
+    # What the index writes where an item has no subject or no sender is
+    # a word of its own language, not the item's: the PDF says it in the
+    # reader's, or leaves the row out.
+    if title in (corpus.NO_SUBJECT, corpus.NO_NAME):
+        title = ""
+    for person in (facts.get("from"), facts.get("organiser")):
+        if person and person.get("name") == corpus.NOBODY:
+            person["name"] = ""
+    if row["src"] == "outlook":
+        kind, rows = say("pdf.kind.mail"), pdf_export.mail_rows(facts, say)
+        body = (pdf_export.mail_text(path) if path is not None else "") or body
+    elif row["src"] == "kalender":
+        kind, rows = say("pdf.kind.event"), pdf_export.event_rows(facts, say)
+        # With its file at hand the appointment's text is its description
+        # – none, when it has none: the index's text would be the place
+        # again, under its search prefix. Without the file the index's is
+        # all there is.
+        if path is not None:
+            body = pdf_export.event_text(path)
+            facts["repeats"] = pdf_export.event_repeats(path)
+    else:
+        try:
+            card = corpus.read_vcard(path.read_text(encoding="utf-8", errors="replace"))
+        except (OSError, AttributeError):        # the card's file is not at hand
+            card = {"name": title, "emails": facts.get("emails") or [], "note": facts.get("note") or ""}
+        kind, rows = say("pdf.kind.contact"), pdf_export.contact_rows(card, say)
+        title, body = card.get("name") or title, card.get("note") or ""
+    checksums = item_checksums(h, row, path) or {}
+    data = pdf_export.render(title, kind, rows, body, {
+        "file": Path(row["rel"]).name if path is not None else "", "sha256": checksums.get("sha256") or "",
+        "folder": row["ctx"] or "", "mail": row["src"] == "outlook"}, say)
+    name = re.sub(r"[^\w .()\-–]+", "_", title, flags=re.UNICODE).strip(" ._")[:80] or say("pdf.untitled").strip("()")
+    return api.roh(200, data, "application/pdf", extra={
+        "Content-Disposition": api.disposition(name + ".pdf")})
 
 
 def search(h, q, merken=True):
@@ -875,7 +937,7 @@ def version_content(h, _p, q, _data):
         body = h.M._links_umleiten(body, target["root"], target["rel"])
     else:
         headers["Content-Disposition"] = (
-            f'attachment; filename="{h.M._sicherer_name(target["path"].name)}"')
+            api.disposition(target["path"].name))
     return api.roh(200, body, ctype, extra=headers)
 
 
@@ -1282,6 +1344,7 @@ ROUTEN = (
     ("GET", "/api/v1/documents", dokument),
     ("GET", "/api/v1/documents/facts", fakten),
     ("GET", "/api/v1/documents/attachments", anhang),
+    ("GET", "/api/v1/documents/pdf", item_pdf),
     ("GET", "/api/v1/documents/versions", item_versions),
     ("GET", "/api/v1/documents/versions/content", version_content),
     ("GET", "/api/v1/documents/versions/diff", version_diff),

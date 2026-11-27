@@ -86,6 +86,7 @@ import api_archive
 import api_cases
 import api_explore
 from api import Ablehnung, Antwort, API_V1, API_VERSION, MODUS, PLAN_QUELLEN, PLAN_EINHEITEN, TEIL_FEHLT  # noqa: F401
+from api import disposition
 import settings
 import state_db
 import store_layout
@@ -2672,6 +2673,7 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/documents", api_explore.dokument),
     ("GET", "/api/v1/documents/facts", api_explore.fakten),
     ("GET", "/api/v1/documents/attachments", api_explore.anhang),
+    ("GET", "/api/v1/documents/pdf", api_explore.item_pdf),
     ("GET", "/api/v1/documents/versions", api_explore.item_versions),
     ("GET", "/api/v1/documents/versions/content", api_explore.version_content),
     ("GET", "/api/v1/documents/versions/diff", api_explore.version_diff),
@@ -3306,8 +3308,7 @@ class Handler(BaseHTTPRequestHandler):
         if endung not in (".html", ".htm"):
             # The file name without path, and only with harmless characters:
             # it ends up in a header and in the download folder.
-            self.send_header("Content-Disposition",
-                             f'attachment; filename="{_sicherer_name(target.name)}"')
+            self.send_header("Content-Disposition", disposition(target.name))
         self.end_headers()
         if self.command == "HEAD":
             return
@@ -3355,13 +3356,6 @@ _CONTENT_TYPE = {
     ".txt": "text/plain; charset=utf-8",
     ".json": "application/json; charset=utf-8",
 }
-
-
-def _sicherer_name(name):
-    """File name for Content-Disposition: no quotes, no line breaks, no
-    path – otherwise the header could be broken open."""
-    sauber = re.sub(r'[\\"\r\n]', "_", Path(name).name).strip()
-    return sauber or "datei"
 
 
 def laeuft_bereits(port, host="127.0.0.1", timeout=1.5, profil=None):

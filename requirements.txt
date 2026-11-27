@@ -13,6 +13,8 @@ msal==1.39.0            # Graph login (device code flow)
 numpy==2.5.4            # embedding matrix for semantic/hybrid search
 requests==2.34.2        # Graph REST calls and Ollama
 tzdata==2026.6          # time zones for the calendar's series (Windows ships none)
+reportlab==5.1.2        # sets an item as a PDF (pdf_export.py); BSD
+pillow==13.0.0          # reportlab imports it at load, also without a picture
 
 
 # Native macOS notifications (UNUserNotificationCenter, notify.py). Only the

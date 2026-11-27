@@ -1,16 +1,16 @@
-## New in 15.2.1
+## New in 15.3.0
 
-- **The signature held against the card**: for a person with a card,
-  *Additional information* lists the numbers and mail addresses the signature
-  names and the card lacks – for a card you added in Munimentum, links too.
-  Read automatically, so check before you take one over.
-- **Possible update**: such a card is marked *possible update*, and *Signature
-  has more* in the *Mail* pill lists these cards alone.
+- **Save as PDF**: a mail, an appointment or a contact opened in *Explore
+  archive* can be saved as a PDF to hand on – its facts and its text, a mail
+  with the quoted history. An `.eml` opens differently on every machine; a PDF
+  opens everywhere.
+- **A rendering, said as such**: a PDF ends with the original's file name, its
+  SHA-256 and the time of the export. An HTML mail is set as text and
+  attachments are listed by name; the original stays in the archive.
 
 ## Upgrading
 
-Nothing to do. The mark appears for everyone whose signature an index run has
-read – after the next run for an archive that comes from before 15.1.0.
+Nothing to do.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

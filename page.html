@@ -5088,11 +5088,46 @@ function detailAktionen(h, nr, link){
                                ? ' onclick="aehnlicheZu(\'' + esc(h.cid) + '\')"'
                                : ' disabled title="' + esc(t('search.menu.similar.aus')) + '"') +
       '>' + ikon('lupe', 'klein') + esc(t('search.menu.similar')) + '</button>' +
+    // A mail, an appointment, a contact as a PDF to hand on (pdf_export.py).
+    (h.uid && ['outlook', 'kalender', 'kontakte'].indexOf(h.source) >= 0
+      ? '<button class="ghost" id="detail-pdf"' + (PDF_BUSY ? ' disabled' : '') + ' onclick="itemPdf(' + jsArg(h.uid) + ')" title="' + esc(t('search.menu.pdf.i')) + '">' +
+        ikon('datei', 'klein') + esc(t('search.menu.pdf')) + '</button>' : '') +
     '<button class="ghost item-link" id="detail-link"' + (h.key
       ? ' onclick="copyItemLink(' + chosenIndex(nr) + ')" title="' + esc(t('search.detail.link')) + '"'
       : ' disabled title="' + esc(t('search.detail.link.nokey')) + '"') +
       ' aria-label="' + esc(t('search.detail.link')) + '">' + ikon('link') + '</button>' +
     '</div>';
+}
+/* The item as a PDF: asked for first and saved then, so a refusal – no
+   index while a run writes it, an item that is gone – is said by the
+   page instead of becoming a broken download. One at a time: the button
+   waits while a PDF is being made. */
+var PDF_BUSY = false;
+function downloadName(header, fallback){
+  // RFC 6266: the name as it is stands in filename*, an ASCII one in filename.
+  var star = /filename\*=UTF-8''([^;]+)/i.exec(header || ''), plain = /filename="([^"]+)"/.exec(header || '');
+  try { if(star) return decodeURIComponent(star[1]); } catch(e){ /* a broken encoding: the plain name */ }
+  return plain ? plain[1] : fallback;
+}
+function itemPdf(uid){
+  if(PDF_BUSY) return Promise.resolve();
+  PDF_BUSY = true;
+  var button = dyn('detail-pdf');
+  if(button) button.disabled = true;
+  function done(){ PDF_BUSY = false; var b = dyn('detail-pdf'); if(b) b.disabled = false; }
+  return fetch(API + '/documents/pdf?uid=' + encodeURIComponent(uid)).then(function(r){
+    if(!r.ok) return r.json().then(function(body){ apiFehler(body || {ok: false}); });
+    var name = downloadName(r.headers.get('Content-Disposition'), 'item.pdf');
+    return r.blob().then(function(blob){
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = name;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(function(){ URL.revokeObjectURL(a.href); }, 1000);
+    });
+  }).catch(function(){ apiFehler({ok: false}); }).then(done);
 }
 /* The link to the item, into the clipboard: its key, and the checksum of
    the version it has now – the one a link pins (itemFromAddress). The

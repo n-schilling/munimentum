@@ -89,7 +89,7 @@ longer at Microsoft, mails with an attachment, and the lines *From*, *To*,
 
 A chosen hit opens on the right with the facts its kind is known by — a mail
 its lines, folder and attachments, each a download — then *Open original*,
-*Add to case*, *Find similar*, a link to copy, and the content; below it,
+*Add to case*, *Find similar*, *Save as PDF* (mail, appointment, contact, to hand on: facts and text – a mail with its quoted history, HTML as text, attachments by name – ending with the original's name, SHA-256 and export time), a link to copy, and the content; below it,
 its **versions**, a conversation and a file's checksums, each in a fold;
 *List* clicked again gives it the whole width. **History** keeps each search by
 its criteria, never its hits; **Saved** keeps them under a name, with the

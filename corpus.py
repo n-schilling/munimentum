@@ -215,7 +215,7 @@ def _teams_file(p_str, root_str):
         out.append({
             "uid": f"teams:{rel}:{i}", "src": "teams", "root": "teams", "rel": rel,
             "thread": f"chat:{rel}",
-            "who": m["n"] or "(unbekannt)", "ppl": (m["n"] + " " + title).lower(),
+            "who": m["n"] or NOBODY, "ppl": (m["n"] + " " + title).lower(),
             "ts": parse_local(m["t"]), "date": m["t"], "title": title, "ctx": ctx,
             "text": (m["x"] or "")[:SAFETY_CAP],
             "msg_id": m.get("id"),
@@ -242,6 +242,11 @@ def strip_html(s):
     s = re.sub(r"(?is)<br\s*/?>|</p>|</div>|</li>|</tr>", " ", s)
     s = re.sub(r"<[^>]+>", " ", s)
     return html_lib.unescape(s)
+
+
+# What a record says where its item names no subject, no sender, no name – data
+# in every index since the first, so they stay as they are.
+NO_SUBJECT, NOBODY, NO_NAME = "(kein Betreff)", "(unbekannt)", "(ohne Namen)"
 
 
 def collapse(s, cap=SAFETY_CAP):
@@ -610,7 +615,7 @@ def _outlook_file(p_str, root_str):
     # Bcc stands in the MIME of a mail one sent oneself; a received one
     # never carries it – that is what a blind copy is.
     bn, be = addr_people(msg, "bcc")
-    who = (fn[0] if fn else (fe[0] if fe else "")) or "(unbekannt)"
+    who = (fn[0] if fn else (fe[0] if fe else "")) or NOBODY
     raw_date = hdr(msg, "date")
     ts, disp = None, raw_date
     try:
@@ -641,7 +646,7 @@ def _outlook_file(p_str, root_str):
         "to_ppl": " ".join(tn + te).lower(),
         "cc_ppl": " ".join(cn + ce).lower(),
         "bcc_ppl": " ".join(bn + be).lower(),
-        "ts": ts, "date": disp, "title": hdr(msg, "subject") or "(kein Betreff)",
+        "ts": ts, "date": disp, "title": hdr(msg, "subject") or NO_SUBJECT,
         "ctx": folder, "text": extract_body(msg),
     }
 
@@ -814,10 +819,10 @@ def _calendar_file(p_str, root_str):
     return {
         "uid": f"kalender:{rel}:0", "src": "kalender", "root": "outlook", "rel": rel,
         "key": f"event:{uid}" if uid else None,
-        "who": org_cn or org_mail or "(unbekannt)", "ppl": ppl,
+        "who": org_cn or org_mail or NOBODY, "ppl": ppl,
         "who_mail": (org_mail or "").lower(),
         "domains": domains([org_mail] + att_mails),
-        "ts": ts, "date": disp, "title": summary or "(kein Betreff)",
+        "ts": ts, "date": disp, "title": summary or NO_SUBJECT,
         "ctx": cal, "text": text[:SAFETY_CAP],
         # A series: what unfolding it takes (recurrence.series_setup), so
         # the index can date it by every date it makes, not its first alone.
@@ -913,7 +918,7 @@ def load_contacts(root_dir):
     root = Path(root_dir)
     for p in sorted(root.rglob("*.vcf")):
         card = read_vcard(p.read_text(encoding="utf-8", errors="replace"))
-        fn = card["name"] or "(ohne Namen)"
+        fn = card["name"] or NO_NAME
         org = " · ".join(x for x in (card["organisation"], card["department"]) if x)
         title, emails, note, uid = card["title"], card["emails"], card["note"], card["uid"]
         tels = [t["number"] for t in card["phones"]]

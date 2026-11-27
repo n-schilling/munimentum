@@ -49,6 +49,7 @@ import sys
 import tempfile
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
 import zipfile
 from pathlib import Path
@@ -448,6 +449,21 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Die Suche fand nichts: {treffer}\n{protokoll(basis)}")
     if "4711" not in json.dumps(treffer, ensure_ascii=False):
         raise Fehler(f"Unerwartetes Suchergebnis: {treffer}")
+    # A hit as a PDF (pdf_export.py): reportlab, Pillow and the two fonts
+    # are only in the bundle if the spec says so – nothing local shows it.
+    cards = hole(f"{basis}/api/v1/search?q=&source=kontakte&limit=1").get("items") or []
+    if not cards:
+        raise Fehler(f"No contact to make a PDF of.\n{protokoll(basis)}")
+    card = cards[0]
+    try:
+        with urllib.request.urlopen(f"{basis}/api/v1/documents/pdf?uid={urllib.parse.quote(card['uid'])}",   # noqa: S310
+                                    timeout=30) as r:
+            pdf = r.read()
+    except urllib.error.HTTPError as e:
+        raise Fehler(f"The PDF route answers {e.code}: "
+                     f"{e.read().decode('utf-8', 'replace')[:300]}\n{protokoll(basis)}") from None
+    if not pdf.startswith(b"%PDF-") or pdf.count(b"/FontFile2") < 2:
+        raise Fehler(f"Not a PDF with its fonts embedded: {pdf[:60]!r}")
     # The whole result behind the timeline and the people view (13.6).
     ganz = hole(f"{basis}/api/v1/search/timeline?q=Rechnung")
     if not ganz.get("items") or "capped" not in ganz:

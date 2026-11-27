@@ -85,6 +85,10 @@ assert datas, "lang/ is empty – the interface would have no texts"
 # app.py reads both from RES; without them the app would start blank.
 datas += [(str(ROOT / "page.html"), "."), (str(ROOT / "profil.html"), "."),
           (str(ROOT / "openapi.yaml"), ".")]
+# The fonts a PDF embeds (pdf_export.py) – without them no PDF is made.
+fonts = sorted((ROOT / "fonts").glob("*"))
+assert any(f.suffix == ".ttf" for f in fonts), "fonts/ is empty – pdf_export would have no font"
+datas += [(str(f), "fonts") for f in fonts]
 # The skills the MCP server serves and gates on (mcp_server._load_skills) –
 # without them it serves no guide and gates nothing. The files are the
 # ones skills_pack zips for the download and the release: one list decides
@@ -118,7 +122,7 @@ a = Analysis(                          # noqa: F821
     runtime_hooks=[],
     # Only needed for the tests or not at all – saves considerable space.
     excludes=["tkinter", "pytest", "coverage", "ruff", "matplotlib",
-              "PIL", "scipy", "pandas", "IPython", "setuptools", "pip"],
+              "scipy", "pandas", "IPython", "setuptools", "pip"],
     noarchive=False,
 )
 pyz = PYZ(a.pure)                      # noqa: F821

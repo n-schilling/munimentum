@@ -6,6 +6,9 @@ take the handler `h` – for `h.app`, the running App, and `h.M`, the running
 app module with its paths – and return an `Antwort`, which the handler
 sends. Nothing here touches a socket.
 """
+import re
+from urllib.parse import quote
+
 import faelle
 
 API_VERSION = "v1"          # the contract's version, not the program's
@@ -41,6 +44,20 @@ def json(obj, code=200, extra=None, nachher=None):
 
 def leer(extra=None):
     return Antwort(204, None, extra)
+
+
+def disposition(name):
+    """`Content-Disposition` for a download under `name` (RFC 6266): the
+    name as it is in `filename*`, percent-encoded, and beside it a
+    `filename` of ASCII alone for a client that reads only that one. A
+    header is sent as Latin-1 – a name with an en dash, a Greek or a
+    Chinese character in `filename` would break the answer after its
+    status line. No quotes, no line ends, no path: the header cannot be
+    broken open."""
+    clean = re.sub(r'[\\"\r\n/\x00-\x1f]', "_", str(name or "")).strip() or "download"
+    plain = "".join(ch if 32 <= ord(ch) < 127 else "_" for ch in clean)
+    header = f'attachment; filename="{plain}"'
+    return header if plain == clean else header + f"; filename*=UTF-8''{quote(clean, safe='')}"
 
 
 def roh(code, body, ctype, extra=None):

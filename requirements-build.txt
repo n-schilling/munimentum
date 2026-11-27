@@ -14,6 +14,6 @@ pyinstaller==6.22.3
 # the volume icon. Only meaningful on macOS, hence the marker.
 dmgbuild[badge-icons]==1.6.7; sys_platform == "darwin"
 
-# Writes the version and the build id into the disk image's picture
-# (packaging/dmg/stempel.py); the committed PNGs stay the template.
-pillow==13.0.0; sys_platform == "darwin"
+# The disk image's picture gets the version and the build id written into
+# it (packaging/dmg/stempel.py) with Pillow – a runtime pin now
+# (requirements.txt, for reportlab), so it has no line of its own here.
