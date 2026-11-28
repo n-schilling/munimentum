@@ -844,6 +844,23 @@ def test_get_document_rejoins_chunks_to_full_text(state):
     assert "context_before" not in out  # no context without context parameters
 
 
+def test_get_document_carries_the_users_note_on_the_item(state, tmp_path):
+    """Read, never written: the note stands beside the item's text as the
+    user's own word – absent without one, and without a profile to ask."""
+    import faelle
+    import item_notes
+    key = "mail:<minutes@example.com>"
+    con = sqlite3.connect(state["store"] / "corpus.db")
+    con.execute("UPDATE chunks SET key = ? WHERE uid = ?", (key, UID_M3))
+    con.commit()
+    con.close()
+    assert mcp_server.get_document(UID_M3)["key"] == key and "note" not in mcp_server.get_document(UID_M3)
+    mcp_server.STATE["faelle_db"] = str(tmp_path / faelle.DB_NAME)
+    assert "note" not in mcp_server.get_document(UID_M3)
+    written = item_notes.ItemNotes(tmp_path / faelle.DB_NAME).put(key, "From the landlord's folder.")
+    assert mcp_server.get_document(UID_M3)["note"] == {"text": "From the landlord's folder.", "updated": written["updated"]}
+
+
 def test_get_document_traegt_die_fakten_je_art(state):
     """The facts the search page's detail shows come with the document –
     already extracted, so Claude parses nothing out of the text."""
@@ -964,7 +981,7 @@ def test_read_source_file_rejects_symlink_escape(state):
 def test_read_source_file_invalid_root_and_missing_file(state):
     out = mcp_server.read_source_file("kalender", "termin.ics")
     assert out == {"error": "source_root must be 'outlook', 'teams', 'onedrive', "
-           "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
+           "'sharepoint', 'pages', 'planner', 'todo', 'onenote' or 'uploads'."}
     out = mcp_server.read_source_file("teams", "1on1/fehlt.html")
     assert out == {"error": "File not found: 1on1/fehlt.html"}
     out = mcp_server.read_source_file("teams", "")  # a directory, not a file
@@ -994,7 +1011,7 @@ def test_tools_without_initialized_state(empty_state):
     # read_source_file fails in a controlled way (no export directory known) …
     out = mcp_server.read_source_file("teams", "x.html")
     assert out == {"error": "source_root must be 'outlook', 'teams', 'onedrive', "
-           "'sharepoint', 'pages', 'planner', 'todo' or 'onenote'."}
+           "'sharepoint', 'pages', 'planner', 'todo', 'onenote' or 'uploads'."}
     # … the DB-backed tools raise a KeyError for lack of STATE["db"]
     # (current behavior – pinned down here)
     with pytest.raises(KeyError):
@@ -1202,7 +1219,7 @@ def test_tool_schema_enthaelt_alle_parameter():
     assert set(schema["properties"]) == {
         "query", "person", "date_from", "date_to", "days", "source", "k",
         "offset", "mode", "preview_chars", "only_gone", "folder", "filetype", "case", "case_folder", "party",
-        "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments",
+        "mail_from", "mail_to", "mail_cc", "mail_bcc", "with_attachments", "added_by_hand",
         # the MCP boundary's own three (_tool): the function never sees them
         "detail", "max_chars", "guide"}
     assert schema["required"] == ["query"]      # only query is required

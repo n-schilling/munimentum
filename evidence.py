@@ -829,9 +829,9 @@ class Fingerprints:
 
 def export_dirs(data):
     """The export folders below a data folder, by the index's source names
-    (settings.QUELLEN) – the `root` a case's item carries."""
+    (settings.ROOTS) – the `root` a case's item carries."""
     import settings
-    return {index: Path(data) / folder for folder, index in settings.QUELLEN.values()}
+    return {index: Path(data) / folder for index, folder in settings.ROOTS.items()}
 
 
 def pinner(data):

@@ -159,7 +159,8 @@ _KRITERIEN_ZEILEN = (("q", "words"), ("mode", "mode"), ("person", "person"), ("s
                      ("case_name", "searched within case"), ("case_folder_name", "within its folder"),
                      ("attach_case", "saved into case"))
 _KRITERIEN_FLAGS = (("gone", "only items no longer at Microsoft"),
-                    ("attachments", "only items with an attachment"))
+                    ("attachments", "only items with an attachment"),
+                    ("added", "only items the user added to the archive by hand"))
 _SPRACHEN = {"de": "German", "en": "English", "fr": "French"}
 
 

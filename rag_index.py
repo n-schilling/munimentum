@@ -511,7 +511,9 @@ _QUELLEN = (("teams", corpus.load_teams), ("teams_files", corpus.load_teams_file
             ("outlook", corpus.load_outlook),
             ("onedrive", corpus.load_onedrive),
             ("sharepoint", corpus.load_sharepoint),
-            ("pages", corpus.load_pages), ("onenote", corpus.load_onenote))
+            ("pages", corpus.load_pages), ("onenote", corpus.load_onenote),
+            # What was added by hand (uploads.py): mails and plain files.
+            (corpus.UPLOADS_ROOT, corpus.load_uploads))
 
 
 # The root a source's chunks carry when it is not the source's own name:
@@ -524,7 +526,7 @@ CHUNK_ROOT = {"teams_files": "teams"}
 
 def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
                  pages_dir, planner_dir, store, todo_dir=None,
-                 onenote_dir=None, read_per_source=None):
+                 onenote_dir=None, read_per_source=None, uploads_dir=None):
     """Every chunk of the archive – re-used from the previous index where the
     file did not change, parsed where it did.
 
@@ -545,7 +547,7 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
     ordner = {"teams": teams_dir, "teams_files": teams_dir,
               "outlook": outlook_dir,
               "onedrive": onedrive_dir, "sharepoint": sharepoint_dir,
-              "pages": pages_dir, "onenote": onenote_dir}
+              "pages": pages_dir, "onenote": onenote_dir, corpus.UPLOADS_ROOT: uploads_dir}
     chunks, manifest, wieder, gelesen = [], {}, 0, 0
     read_per_source = {} if read_per_source is None else read_per_source
     for art, laden in _QUELLEN:
@@ -581,6 +583,8 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
         if art == "outlook":
             chunks += corpus.chunk_records(corpus.load_calendar(wurzel)
                                            + corpus.load_contacts(wurzel))
+        elif art == corpus.UPLOADS_ROOT:
+            chunks += corpus.chunk_records(corpus.load_upload_cards(wurzel))
     if planner_dir and Path(planner_dir).is_dir():
         chunks += corpus.chunk_records(corpus.load_planner(planner_dir))
     if todo_dir and Path(todo_dir).is_dir():
@@ -595,7 +599,7 @@ def lese_bestand(teams_dir, outlook_dir, onedrive_dir, sharepoint_dir,
 def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
                 embeddings=True, onedrive_dir=None, sharepoint_dir=None,
                 pages_dir=None, planner_dir=None, todo_dir=None,
-                onenote_dir=None):
+                onenote_dir=None, uploads_dir=None):
     # Reading a large archive takes a minute or more and used to be silent –
     # long enough for someone watching the log to suspect a hang.
     progress.event("run.index.reading")
@@ -604,7 +608,7 @@ def build_index(teams_dir, outlook_dir, store, model, url, batch=128,
     chunks, manifest, wieder, gelesen = lese_bestand(
         teams_dir, outlook_dir, onedrive_dir, sharepoint_dir, pages_dir,
         planner_dir, store, todo_dir=todo_dir, onenote_dir=onenote_dir,
-        read_per_source=read_per_source)
+        read_per_source=read_per_source, uploads_dir=uploads_dir)
     if corpus.POOL_FEHLER:
         # Don't keep quiet about this: the index is correct, but reading ran
         # on one core instead of all, and with large archives that shows.
@@ -730,6 +734,7 @@ def main():
     ap.add_argument("--planner", required=True)
     ap.add_argument("--todo", required=True)
     ap.add_argument("--onenote", required=True)
+    ap.add_argument("--uploads", default=None, help="what was added by hand (uploads.py)")
     ap.add_argument("--store", required=True)
     ap.add_argument("--model", default=settings.value("embed_model"))
     ap.add_argument("--ollama", default=settings.value("ollama"))
@@ -745,7 +750,7 @@ def main():
                               onedrive_dir=a.onedrive,
                               sharepoint_dir=a.sharepoint, pages_dir=a.pages,
                               planner_dir=a.planner, todo_dir=a.todo,
-                              onenote_dir=a.onenote)
+                              onenote_dir=a.onenote, uploads_dir=a.uploads)
     # The Analytics tab reads a materialised block instead of aggregating on
     # every visit – this run just touched everything, so build it now. Its
     # failure must not fail the index; with nothing indexed there is

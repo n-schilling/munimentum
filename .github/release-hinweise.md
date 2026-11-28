@@ -1,16 +1,25 @@
-## New in 15.3.0
+## New in 16.0.0
 
-- **Save as PDF**: a mail, an appointment or a contact opened in *Explore
-  archive* can be saved as a PDF to hand on – its facts and its text, a mail
-  with the quoted history. An `.eml` opens differently on every machine; a PDF
-  opens everywhere.
-- **A rendering, said as such**: a PDF ends with the original's file name, its
-  SHA-256 and the time of the export. An HTML mail is set as text and
-  attachments are listed by name; the original stays in the archive.
+- **Added by hand**: *Build archive* takes files Microsoft 365 does not hold – a
+  scanned letter, a contract, a mail handed over as a file. An `.eml`, `.ics`
+  or `.vcf` is read as mail, appointment or contact; any other file is found
+  by the title, date, people and description you may type.
+- **Kept apart, in the chain**: what you add lies in a folder of its own, is
+  marked *added by hand* wherever it appears and is an entry of *Files*. A run
+  of its own takes it in, writes it into the checksum chain and indexes it.
+- **Search**: *Added by hand* is a filter of its own, and *Source* takes
+  several sources at once – the two combine.
+- **A note on every item**: your own note on any item, whatever its source –
+  written from the detail in *Explore archive*, from a case's row, or with a
+  file as you add it. Earlier wordings are kept; MCP clients read the note.
+- **One window in a case**: an item's note and the remark on why it is in the
+  case are written in one window, opened by one button on the row.
 
 ## Upgrading
 
-Nothing to do.
+Nothing to do. For scripts against the HTTP interface: the `auth` node of
+`GET /api/v1/status`, announced as deprecated since 14.1.0, is gone –
+`GET /api/v1/access/session` answers the same.
 
 Skipping releases is fine: whatever an older release does once after an
 update, the first run does too. What changes for scripts against the

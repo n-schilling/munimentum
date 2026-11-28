@@ -4,6 +4,7 @@ the sources' checks and fetches, the completeness balance, the folder
 plans, Insights, the schedule and the storage paths.
 """
 import json
+import threading
 
 import api
 import archive_check
@@ -14,6 +15,7 @@ import folders
 import i18n
 import state_db
 import steps as steps_mod
+import uploads
 from api import Ablehnung
 
 
@@ -61,6 +63,69 @@ def lauf_starten(h, _p, _q, data):
     if not ok:
         raise Ablehnung(409, why)
     return lauf_antwort(h, why)
+
+
+# -- what the keeper adds by hand (uploads.py) --------------------------------
+def upload_stage(h, _p, q, data):
+    """One file's bytes, kept in a staging slot of the profile – not in the
+    archive yet. Answers what the app takes the file for (a mail, an
+    appointment, a contact card, a plain file) and what it reads in it,
+    so the window asks only for what the file does not say itself."""
+    name = str(q.get("name") or "").strip()
+    if not name:
+        uploads.discard_slot(h.M.HEIM, data["id"])
+        raise Ablehnung(400, "srv.badparam", {"name": "name"})
+    try:
+        return api.json(uploads.stage(h.M.HEIM, data["id"], name))
+    except OSError:
+        # A name the disk refuses after all: nothing is kept of it.
+        uploads.discard_slot(h.M.HEIM, data["id"])
+        raise Ablehnung(400, "srv.badparam", {"name": "name"}) from None
+    except Exception:
+        # Bytes a reader trips over: refused as the server's fault, but the
+        # slot does not wait a day for the sweep.
+        uploads.discard_slot(h.M.HEIM, data["id"])
+        raise
+
+
+def upload_discard(h, p, _q, _data):
+    """Drop a staged file that is not to be added after all."""
+    if not uploads.discard(h.M.HEIM, p.get("id")):
+        raise Ablehnung(404, "srv.upload.unknown")
+    return api.leer()
+
+
+def upload_add(h, _p, _q, data):
+    """Add the staged files to the archive: a run that takes them in,
+    chains them, and builds the index and the calendar – as after an
+    export. `items` names each by its id; a plain file with what is to be
+    said about it (title, date, people, description)."""
+    # One add at a time: two at once would both pass the busy check, and
+    # the second would write over the first one's list before its run.
+    with _ADDING:
+        return _upload_add(h, data)
+
+
+_ADDING = threading.Lock()
+
+
+def _upload_add(h, data):
+    if h.app.jobs.busy:
+        raise Ablehnung(409, "srv.busy")
+    items = data.get("items")
+    try:
+        if not isinstance(items, list):
+            raise uploads.BadValue("items")
+        listed = uploads.commit(h.M.HEIM, items)
+    except uploads.BadValue as e:
+        raise Ablehnung(400, "srv.upload.badvalue", {"field": e.field}) from None
+    # The calendar file holds the appointments and the cards: built again
+    # only when one of them came.
+    cards = any(item["kind"] in ("event", "contact") for item in listed)
+    ok, why = h.app.launch({"upload": True, "index": True, "calendar": cards}, label="job.upload")
+    if not ok:
+        raise Ablehnung(409, why)
+    return lauf_antwort(h, why, {"count": len(listed)})
 
 
 def lauf_antwort(h, warum=None, extra=None):
@@ -619,6 +684,9 @@ def evidence_accept(h, _p, _q, data):
 ROUTEN = (
     ("GET", "/api/v1/runs", laeufe),
     ("POST", "/api/v1/runs", lauf_starten),
+    ("PUT", "/api/v1/uploads/staged", upload_stage),
+    ("DELETE", "/api/v1/uploads/staged/{id}", upload_discard),
+    ("POST", "/api/v1/uploads", upload_add),
     ("GET", "/api/v1/runs/current", lauf_jetzt),
     ("DELETE", "/api/v1/runs/current", lauf_abbrechen),
     ("GET", "/api/v1/log", log),

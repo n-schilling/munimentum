@@ -9,6 +9,8 @@ Each test makes its own case with its own name – the app under test is
 shared for the whole session, so nothing may depend on what ran before.
 """
 
+from urllib.parse import quote
+
 import pytest
 
 from playwright.sync_api import expect
@@ -163,22 +165,54 @@ def test_a_note_goes_into_the_casebook(archive_page, archive):
         EN["cases.facts.notes"].format(n=1))
 
 
-def test_a_remark_says_why_an_item_is_in_the_case(archive_page, archive):
+def test_a_note_on_the_item_and_a_remark_in_the_case_share_one_window(archive_page, archive):
+    """One button on the row: the note belongs to the item and shows in
+    Explore too, the remark belongs to this case and shows in its row."""
     name = f"{PROJECT} with a remark"
     case_id = make_case(archive, name)
     eintraege = fill_case(archive, case_id, f"{PROJECT} rollout plan", 1)
-    grund = "The draft everything else refers to."
+    grund, herkunft = "The draft everything else refers to.", "Handed over on paper, scanned the same day."
     open_case(archive_page, archive, name)
     expand_all(archive_page)
     zeile = archive_page.locator("#fall-inhalt .eintrag").first
-    zeile.locator(f'button[title="{EN["cases.remark.add"]}"]').click()
+    expect(zeile.locator("button.nur-ikon")).to_have_count(1)
+    zeile.locator(f'button[title="{EN["note.row"]}"]').click()
     dialog = add_dialog(archive_page)
+    expect(dialog).to_contain_text(EN["note.field.item"])
+    expect(dialog).to_contain_text(EN["note.field.case"])
     dialog.locator("#bemerkung-text").fill(grund)
-    dialog.get_by_role("button", name=EN["cases.remark.save"], exact=True).click()
+    dialog.locator("#item-note-text").fill(herkunft)
+    dialog.get_by_role("button", name=EN["note.save"], exact=True).click()
     expect(dialog).to_be_hidden()
     zeile = archive_page.locator("#fall-inhalt .eintrag").first
-    expect(zeile.locator(".bem")).to_contain_text(grund)
+    # The remark stands in the row; the note is the item's and only marks the button here.
+    expect(zeile.locator(".bem")).to_have_text(grund)
+    expect(zeile).not_to_contain_text(herkunft)
+    expect(zeile.locator(f'button.has-note[title="{EN["note.row.has"]}"]')).to_be_visible()
     expect(zeile.locator(".t")).to_contain_text(eintraege[0]["title"][:20])
+    # Opened again both are in their fields; the note changed here keeps what it said.
+    zeile.locator("button.has-note").click()
+    dialog = add_dialog(archive_page)
+    expect(dialog.locator("#bemerkung-text")).to_have_value(grund)
+    expect(dialog.locator("#item-note-text")).to_have_value(herkunft)
+    dialog.locator("#item-note-text").fill(herkunft + " Page 3 is missing.")
+    dialog.get_by_role("button", name=EN["note.save"], exact=True).click()
+    expect(dialog).to_be_hidden()
+    zeile.locator("button.has-note").click()
+    dialog = add_dialog(archive_page)
+    dialog.locator("#item-note-fold summary").click()
+    expect(dialog.locator("#item-note-earlier blockquote")).to_have_text(herkunft)
+    # In Explore the item shows its note below the facts – and nothing of the case's remark.
+    archive_page.goto("about:blank")
+    archive_page.goto(f"{archive.base}/#item={quote(eintraege[0]['key'], safe='')}")
+    expect(archive_page.locator("#detail-note .note-text")).to_have_text(herkunft + " Page 3 is missing.")
+    expect(archive_page.locator("#detail")).not_to_contain_text(grund)
+    archive_page.locator("#detail-note-button").click()
+    dialog = add_dialog(archive_page)
+    expect(dialog.locator("#bemerkung-text")).to_have_count(0)
+    dialog.get_by_text(EN["note.remove"], exact=True).click()
+    expect(dialog).to_be_hidden()
+    expect(archive_page.locator("#detail-note")).to_be_empty()
 
 
 def test_an_item_leaves_the_case_and_stays_in_the_archive(archive_page, archive):
@@ -254,3 +288,36 @@ def test_a_closed_case_is_read_only_and_can_be_deleted(archive_page, archive):
     archive_page.on("dialog", lambda d: d.accept())
     archive_page.locator("#fall-fuss").get_by_text(EN["cases.delete"], exact=True).click()
     expect(archive_page.locator("#faelle-liste")).not_to_contain_text(name)
+
+
+def test_a_note_changed_twice_in_explore_keeps_showing_itself_and_its_history(archive_page, archive):
+    """Written, changed, changed again from the detail: after every save
+    the note stands below the facts, and the window lists every earlier
+    wording."""
+    search_and_open_first(archive_page, archive, f"{PROJECT} rollout plan").first.click()
+    wordings = ["First wording.", "Second wording.", "Third wording."]
+    for n, text in enumerate(wordings):
+        archive_page.locator("#detail-note-button").click()
+        dialog = add_dialog(archive_page)
+        expect(dialog.locator("#item-note-text")).to_have_value(wordings[n - 1] if n else "")
+        # What it said before: the wordings this test replaced, newest first – from
+        # the second change on. (The item may carry older ones of another test.)
+        earlier = list(reversed(wordings[:n - 1])) if n else []
+        if earlier:
+            expect(dialog.locator("#item-note-fold summary")).to_be_visible()
+            dialog.locator("#item-note-fold summary").click()
+            for at, said in enumerate(earlier):
+                expect(dialog.locator("#item-note-earlier blockquote").nth(at)).to_have_text(said)
+        dialog.locator("#item-note-text").fill(text)
+        dialog.get_by_role("button", name=EN["note.save"], exact=True).click()
+        expect(dialog).to_be_hidden()
+        expect(archive_page.locator("#detail-note .note-text")).to_have_text(text)
+    # Opened once more: the third wording in the field, the two before it below.
+    archive_page.locator("#detail-note-button").click()
+    dialog = add_dialog(archive_page)
+    expect(dialog.locator("#item-note-text")).to_have_value(wordings[2])
+    dialog.locator("#item-note-fold summary").click()
+    expect(dialog.locator("#item-note-earlier blockquote").nth(0)).to_have_text(wordings[1])
+    expect(dialog.locator("#item-note-earlier blockquote").nth(1)).to_have_text(wordings[0])
+    dialog.get_by_text(EN["note.remove"], exact=True).click()
+    expect(archive_page.locator("#detail-note")).to_be_empty()

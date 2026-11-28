@@ -17,12 +17,12 @@ chain would call a file there a write from outside.
 
 import json
 import re
-import sqlite3
 from pathlib import Path
 
 import correspondents
 import faelle
 import own_contacts
+import profile_db
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS footers(
@@ -106,24 +106,12 @@ class Footers:
         self.path = Path(path)
 
     def _connect(self):
-        con = sqlite3.connect(str(self.path), timeout=30)
-        con.row_factory = sqlite3.Row
-        con.executescript(_SCHEMA)
-        return con
+        return profile_db.connect(self.path, _SCHEMA)
 
     def _read(self, query, args=()):
-        """Rows without creating anything: a reader beside the app (the
-        MCP process, a page before the first run) finds no table."""
-        if not self.path.is_file():
-            return []
-        con = sqlite3.connect(f"file:{self.path}?mode=ro", uri=True, timeout=30)
-        con.row_factory = sqlite3.Row
-        try:
-            return con.execute(query, args).fetchall()
-        except sqlite3.OperationalError:
-            return []
-        finally:
-            con.close()
+        # Creates nothing; no table is no footer, a locked file an error –
+        # read as "none kept" an index run would read every footer again.
+        return profile_db.rows(self.path, query, args)
 
     def found(self):
         """The addresses a footer is kept for."""
@@ -165,7 +153,7 @@ class Footers:
                     "INSERT OR REPLACE INTO footers VALUES (?,?,?,?,?,?,?,?)",
                     (address, lines, found.get("basis") if has else None,
                      found.get("uid") if has else None, found.get("date") if has else None,
-                     own_contacts.now(), stamp[0], stamp[1]))
+                     profile_db.now(), stamp[0], stamp[1]))
         finally:
             con.close()
         return (before["lines"] if before else "[]") != lines

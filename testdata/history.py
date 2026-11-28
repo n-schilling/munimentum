@@ -30,7 +30,9 @@ from datetime import UTC, datetime, timedelta
 
 import evidence
 import faelle
+import item_notes
 import own_contacts
+import uploads
 import organization
 import outlook_export
 import settings
@@ -196,7 +198,7 @@ def _env(exports):
 
 
 def _roots(exports):
-    return [exports / folder for folder, _index in settings.QUELLEN.values()]
+    return [exports / folder for folder in settings.ROOTS.values()]
 
 
 def _stamp(path, when):
@@ -335,6 +337,25 @@ def own_contact(home):
     return ident
 
 
+# The keeper's note on the scan they added by hand – reworded once, so the
+# window has an earlier wording to show.
+ITEM_NOTE = ("Handed over by the landlord at the site meeting.",
+             "Handed over by the landlord at the site meeting; the signed original is in the office safe.")
+
+
+def item_note_key(exports):
+    """The scan's key, asked of the index's own readers (uploads.item_keys)."""
+    rel = sources.upload_rel("file")
+    return uploads.item_keys(exports / settings.UPLOADS_DIR, [rel])[rel]
+
+
+def item_note(home, exports):
+    """The note on the uploaded scan (item_notes.py), in the profile's database."""
+    notes = item_notes.ItemNotes(home / faelle.DB_NAME)
+    for text in ITEM_NOTE:
+        notes.put(item_note_key(exports), text)
+
+
 def archive_report(home, exports, store, run):
     """The archive check's stored report, so Insights has one to show – at
     the place the app reads it from (app.archiv_bericht_pfad)."""
@@ -345,6 +366,7 @@ def archive_report(home, exports, store, run):
          "--planner", str(exports / settings.PLANNER_DIR),
          "--todo", str(exports / settings.TODO_DIR),
          "--onenote", str(exports / settings.ONENOTE_DIR),
+         "--uploads", str(exports / settings.UPLOADS_DIR),
          "--store", str(store), "--report", str(home / "archivpruefung.json"),
          "--data", str(exports)])
     return json.loads((home / "archivpruefung.json").read_text(encoding="utf-8"))

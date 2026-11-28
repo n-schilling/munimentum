@@ -491,6 +491,31 @@ def pruefe(exe, daten, port, proc):
         raise Fehler(f"Die Serie zählt nicht auf ihrer Zeitzone (Zonendaten im Bündel?): "
                      f"{len(serie)} Termine, Uhrzeiten {sorted(stunden)}\n{protokoll(basis)}")
 
+    schritt("Add a file by hand (the upload step is the bundled file itself)")
+    # uploads.py runs as a step of its own (`--run uploads`): the staged
+    # file goes into the archive, is chained and indexed – and found.
+    request = urllib.request.Request(
+        f"{basis}/api/v1/uploads/staged?name=smoke-letter.txt", data=b"handed over by the smoke test",
+        method="PUT", headers={"Content-Type": "application/octet-stream"})
+    with urllib.request.urlopen(request, timeout=30) as r:     # noqa: S310
+        staged = json.loads(r.read())
+    if staged.get("kind") != "file":
+        raise Fehler(f"The staged file was not taken for a file: {staged}")
+    sende(f"{basis}/api/v1/uploads", {"items": [{"id": staged["id"], "title": "Smoke letter",
+                                                 "description": "zeppelinpost from the smoke test",
+                                                 "note": "A note from the smoke test."}]})
+    last = warte_auf(fertig, 240, "the upload run finishes")
+    if not last.get("ok") or last.get("steps", [])[:1] != ["upload"]:
+        raise Fehler(f"The upload run failed: {last}\n{protokoll(basis)}")
+    found = hole(f"{basis}/api/v1/search?q=zeppelinpost&limit=5").get("items") or []
+    if [h.get("root") for h in found] != ["uploads"]:
+        raise Fehler(f"The added file is not found under its own root: {found}\n{protokoll(basis)}")
+    # The note that came with it: filed by the bundled step under the key
+    # the index gave the file, and read back as the item's note.
+    note = hole(f"{basis}/api/v1/notes?key={urllib.parse.quote(found[0].get('key') or '', safe='')}")
+    if note.get("text") != "A note from the smoke test.":
+        raise Fehler(f"The note that came with the file is not on the item: {note}\n{protokoll(basis)}")
+
     schritt("Skills als Download")
     # The bundle carries skills/ (app.spec, through skills_pack.skill_files)
     # and the route zips them from there. The release assets are made from

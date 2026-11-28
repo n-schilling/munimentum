@@ -23,6 +23,7 @@ import sys
 from pathlib import Path
 
 import ollama_client
+import store_layout
 
 CONFIG_NAME = "app_config.json"
 
@@ -39,6 +40,7 @@ SHAREPOINT_PAGES_DIR = "sharepoint_pages"
 PLANNER_DIR = "planner_export"
 TODO_DIR = "todo_export"
 ONENOTE_DIR = "onenote_export"
+UPLOADS_DIR = "uploads_export"      # what the keeper added by hand (uploads.py), never Microsoft's
 # The eight sources, once: by the step registry's name, the export folder
 # under the data dir and the name the index gives the same source (the
 # `root` of a hit, the MCP file tools' `source_root`) – which differs for
@@ -48,6 +50,10 @@ QUELLEN = {"outlook": (OUTLOOK_DIR, "outlook"), "teams": (TEAMS_DIR, "teams"),
            "onedrive": (ONEDRIVE_DIR, "onedrive"), "sharepoint": (SHAREPOINT_DIR, "sharepoint"),
            "sharepoint_pages": (SHAREPOINT_PAGES_DIR, "pages"), "planner": (PLANNER_DIR, "planner"),
            "todo": (TODO_DIR, "todo"), "onenote": (ONENOTE_DIR, "onenote")}
+# … and beside them what does not come from Microsoft: the files added by
+# hand. Not one of the eight – no export, no balance row, no folder rules –
+# but a root of the index and of the evidence chain like theirs.
+ROOTS = {**{index: folder for folder, index in QUELLEN.values()}, store_layout.UPLOADS_ROOT: UPLOADS_DIR}
 STORE_DIR = "rag_store"
 
 # Mailbox folders that the default selection of outlook_export.py skips.

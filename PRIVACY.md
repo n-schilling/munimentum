@@ -34,7 +34,12 @@ directory says of your colleagues — names, titles, departments, offices, mail
 addresses and who reports to whom — as one file below the Teams folder, every
 earlier state of it kept; its `state.db` holds every account the directory
 named, guests and disabled ones included, so a changed rule needs no second
-reading. Beside the export folders lie two more of the archive's own:
+reading. What you add by hand lies in a
+folder of its own beside the export folders (`uploads_export/`), with what
+you typed about each file; while a file waits to be added it lies in the
+profile's folder, and is dropped once it is a day old – at the app's next
+start or the next upload – when you do not add it.
+Beside the export folders lie two more of the archive's own:
 `versions/` with the earlier version of every file a run replaced, and
 `evidence/` with the chain of checksums the archive keeps of itself, the time
 stamps a service signed and the list a closed case wrote down. The search
@@ -47,7 +52,7 @@ removed by hand, so that a search set to collect automatically does not put
 them back. The contacts you add to the address book in the app are rows in
 the same file – name, mail address, what you typed, the mail signature as last
 read, and what a card said before each change or its removal – and are never
-sent to Microsoft; the addresses and names you set to be ignored there lie beside them, and so do the mail signatures an index run reads for the people the address book lists, each with the time it was read. Three things leave the app's folders, each only when you ask: a
+sent to Microsoft; the addresses and names you set to be ignored there lie beside them, and so do the mail signatures an index run reads for the people the address book lists, each with the time it was read. A note you write on an item is a row there too, by the item's key, with what it said before each change. Three things leave the app's folders, each only when you ask: a
 **case export**, a ZIP of copied originals under the path you chose (your
 Documents folder by default), and the **organization as CSV**, the names and
 titles of colleagues – mail addresses only when you tick them – and a single
@@ -73,7 +78,7 @@ coverage, the run history with the logs those runs wrote, the completeness
 balance against Microsoft, the analytics figures, your cases and saved
 searches, the earlier versions of items and their checksums, the organization
 in every version the archive holds, whom you exchange mail with, the signatures
-under their mails and the contacts you added — to any MCP client, Claude for one,
+under their mails, the contacts you added and the note you wrote on an item it reads — to any MCP client, Claude for one,
 on `127.0.0.1`. It reads; it changes a case only when *MCP clients may
 change cases* is on under *Settings › MCP clients*, and then only adds.
 What the client does with the passages it reads is governed by your

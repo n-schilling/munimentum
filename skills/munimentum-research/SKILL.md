@@ -5,7 +5,7 @@ description: Use when the user asks about their own Microsoft 365 history held i
 
 # Researching a Munimentum archive
 
-This guide belongs to Munimentum 15.3.0. Installed by hand – under
+This guide belongs to Munimentum 16.0.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -93,7 +93,9 @@ account in the first answer: the user may keep several archives.
   document says will not find it; its name or `filetype` will.
 - Read before you conclude: a preview is 200 characters. `get_document`
   gives the full text and `facts` (from, to, cc, attendees, due dates …) –
-  never parse those out of text yourself.
+  never parse those out of text yourself. A `note` there is the user's
+  own note on the item, written in Munimentum: quote it as their note,
+  never as part of the item. You cannot write one.
 
 ## Before saying "there is nothing"
 
@@ -177,3 +179,11 @@ or described as one message – was read with `get_document` and carries its
 cite.label and cite.link; a list of hits carries labels only. A null link
 means Munimentum is not running: say once that the links work while it
 runs. Answer in the user's language.
+
+A hit whose root is "uploads" did not come from Microsoft 365: the user
+added it to the archive by hand – a scanned letter, a contract, a mail
+someone handed over as a file. Say so when you cite it. A plain file among
+them is known only by the title, the people and the description the user
+typed; its content is not read. `added_by_hand` narrows a search to what
+was added by hand and combines with `source` – with "kalender", the
+appointments added by hand.

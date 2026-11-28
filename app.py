@@ -71,7 +71,9 @@ import completeness
 import export_util
 import evidence
 import faelle
+import item_notes
 import own_contacts
+import uploads
 import folders
 import i18n
 import instance
@@ -109,6 +111,7 @@ FROZEN = bool(getattr(sys, "frozen", False))
 # scripts they lie side by side, in the bundle as modules inside it.
 RUNNABLE = ("outlook_export", "teams_export", "rag_index", "combined_search",
             "mcp_server", "case_export", "case_collect", "evidence",
+            "uploads",          # what was added by hand goes into the archive
             # auth is not an export step but a self-report: which sign-in
             # path applies, is a key present, is there a cache. In the
             # bundle this is the only way to check that without network –
@@ -641,6 +644,9 @@ SHAREPOINT_PAGES_DIR = settings.SHAREPOINT_PAGES_DIR
 PLANNER_DIR = settings.PLANNER_DIR
 TODO_DIR = settings.TODO_DIR
 ONENOTE_DIR = settings.ONENOTE_DIR
+UPLOADS_DIR = settings.UPLOADS_DIR
+# The one route whose body is not JSON: the bytes of a file to add.
+RAW_BODY = {("PUT", API_V1 + "/uploads/staged")}
 STORE_DIR = settings.STORE_DIR
 DEFAULT_CONFIG = settings.VORGABEN
 BASE, STORE_PFAD = _split_pfade(HEIM)
@@ -1726,6 +1732,8 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         # The automatic searches: {faelle, domains, case, search} for
         # case_collect.py – all of them, one case's, or one search.
         "case_collect": dict(case_collect or {}),
+        # Where the files added by hand wait for their run (uploads.py).
+        "upload": {"home": str(HEIM)},
         # The completeness checks: the balance rows the Insights card
         # asked for, or None – then a check follows the export's switches.
         "check_rows": list(check_rows) if check_rows is not None else None,
@@ -1746,6 +1754,7 @@ def build_steps(cfg, angefragt, *, embeddings=True, token="",
         "outlook": OUTLOOK_DIR, "teams": TEAMS_DIR, "onedrive": ONEDRIVE_DIR,
         "sharepoint": SHAREPOINT_DIR, "sharepoint_pages": SHAREPOINT_PAGES_DIR,
         "planner": PLANNER_DIR, "todo": TODO_DIR, "onenote": ONENOTE_DIR,
+        store_layout.UPLOADS_ROOT: UPLOADS_DIR,
         "store": str(STORE_PFAD),
         "store_db": store_layout.db_path(STORE_PFAD),
         # ONE absolute path for both: the step writes it, the skip target,
@@ -1994,6 +2003,7 @@ class SearchBridge:
                 planner_dir=str(BASE / PLANNER_DIR),
                 todo_dir=str(BASE / TODO_DIR),
                 onenote_dir=str(BASE / ONENOTE_DIR),
+                uploads_dir=str(BASE / UPLOADS_DIR),
                 runs_db=str(HEIM / run_history.DB_NAME),
                 # The case book: the `case` filter and the mark on every
                 # hit. The page writes through its own routes, never
@@ -2023,6 +2033,8 @@ class App:
         self.faelle.aufraeumen(historie_tage(self.cfg))
         # The contacts added to the address book in the app: same file.
         self.own_contacts = own_contacts.OwnContacts(HEIM / faelle.DB_NAME)
+        # … and the notes on items (item_notes.py).
+        self.item_notes = item_notes.ItemNotes(HEIM / faelle.DB_NAME)
         self.jobs = JobRunner(self.history, cwd=lambda: str(BASE), res=RES)
         self.mcp = McpProcess(self.jobs, _mcp_befehl, mcp_client_config)
         self.search = SearchBridge()
@@ -2202,9 +2214,6 @@ class App:
             "wizard": wizard,
             "update": {k: self._update.get(k) for k in
                        ("status", "latest", "url", "newer", "ahead", "error", "retry_at")},
-            # Deprecated, announced by header, gone in 16.0.0
-            # (api_app.AUTH_GONE_IN): the page asks GET /api/v1/access/session.
-            "auth": self.access_session(),
         }
 
     def umgebung(self):
@@ -2252,8 +2261,11 @@ class App:
             # What the index is and what it can do. It changes with a run,
             # like everything else here – in the poll it repeated a list of
             # column names every thirty seconds.
-            "store": {k: store.get(k) for k in
-                      ("exists", "features", "semantic", "built_at")},
+            "store": {**{k: store.get(k) for k in ("exists", "semantic", "built_at")},
+                      # … and `added` once the keeper added something by hand
+                      # (uploads.py): the search offers its filter only then.
+                      "features": [*(store.get("features") or []),
+                                   *(["added"] if (BASE / UPLOADS_DIR).is_dir() else [])]},
             "exports": export_status(self.cfg),
             "folders": folders.zusammenfassung(
                 folders.lade(BASE / OUTLOOK_DIR),
@@ -2674,6 +2686,10 @@ ROUTEN_V1 = (
     ("GET", "/api/v1/documents/facts", api_explore.fakten),
     ("GET", "/api/v1/documents/attachments", api_explore.anhang),
     ("GET", "/api/v1/documents/pdf", api_explore.item_pdf),
+    ("GET", "/api/v1/notes", api_explore.item_note),
+    ("PUT", "/api/v1/notes", api_explore.item_note_write),
+    ("GET", "/api/v1/notes/keys", api_explore.item_note_keys),
+    ("GET", "/api/v1/notes/versions", api_explore.item_note_versions),
     ("GET", "/api/v1/documents/versions", api_explore.item_versions),
     ("GET", "/api/v1/documents/versions/content", api_explore.version_content),
     ("GET", "/api/v1/documents/versions/diff", api_explore.version_diff),
@@ -2695,6 +2711,9 @@ ROUTEN_V1 = (
     ("PATCH", "/api/v1/config", api_app.konfig_aendern),
     ("GET", "/api/v1/runs", api_archive.laeufe),
     ("POST", "/api/v1/runs", api_archive.lauf_starten),
+    ("PUT", "/api/v1/uploads/staged", api_archive.upload_stage),
+    ("DELETE", "/api/v1/uploads/staged/{id}", api_archive.upload_discard),
+    ("POST", "/api/v1/uploads", api_archive.upload_add),
     ("GET", "/api/v1/runs/current", api_archive.lauf_jetzt),
     ("DELETE", "/api/v1/runs/current", api_archive.lauf_abbrechen),
     ("GET", "/api/v1/log", api_archive.log),
@@ -2934,7 +2953,7 @@ class Handler(BaseHTTPRequestHandler):
         try:
             # Read first, route second: a body left on the connection would
             # be taken for the next request, wrong method or not.
-            data = self._body()
+            data = (self._incoming_file() if (methode, pfad) in RAW_BODY else self._body())
             if pfad.startswith(API_V1 + "/"):
                 return self._v1(methode, pfad,
                                 {k: v[0] for k, v in parse_qs(u.query).items()}, data, routen)
@@ -3038,6 +3057,43 @@ class Handler(BaseHTTPRequestHandler):
         """The DNS-rebinding guard's answer: a Host that is not ours."""
         return self._fehler(403, "srv.forbidden",
                             {"host": (self.allowed_hosts or ("127.0.0.1",))[0]})
+
+    def _incoming_file(self):
+        """The body of an upload: bytes of any kind, written to a staging
+        slot as they arrive – never held in memory, never parsed. Answers
+        what the route needs to name them: the slot's id and the size.
+        (The JSON routes take 4 MB; a scan or a recording is larger.)"""
+        try:
+            n = int(self.headers.get("Content-Length") or "")
+        except ValueError:
+            self._gelesen, self.close_connection = True, True
+            raise Ablehnung(400, "srv.badlength") from None
+        if n <= 0:
+            self._gelesen = True
+            raise Ablehnung(400, "srv.upload.empty")
+        if n > uploads.MAX_BYTES:
+            self._gelesen, self.close_connection = True, True
+            raise Ablehnung(413, "srv.upload.toobig", {"mb": uploads.MAX_BYTES // (1024 * 1024)})
+        uploads.sweep(HEIM)
+        ident, folder = uploads.new_slot(HEIM)
+        left = n
+        try:
+            with open(folder / uploads.INCOMING, "wb") as f:
+                while left > 0:
+                    piece = self.rfile.read(min(left, 256 * 1024))
+                    if not piece:
+                        break
+                    f.write(piece)
+                    left -= len(piece)
+        except OSError:
+            left = -1
+        self._gelesen = True
+        if left != 0:
+            # The sender stopped early, or the disk refused: nothing is kept.
+            self.close_connection = True
+            uploads.discard_slot(HEIM, ident)
+            raise Ablehnung(400, "srv.upload.broken")
+        return {"id": ident, "size": n}
 
     def _body(self):
         """The request body as a dict. An absent or empty one is no error –
@@ -3205,7 +3261,9 @@ class Handler(BaseHTTPRequestHandler):
         res = mod.search_messages(
             query=query, person=str(data.get("person") or ""),
             date_from=str(data.get("from") or ""), date_to=str(data.get("to") or ""),
-            source=str(data.get("source") or "all"), k=k, preview_chars=0)
+            source=str(data.get("source") or "all"),
+            # The list's own narrowing to what was added by hand: the answer cites what the list shows.
+            added_by_hand=data.get("added") is True, k=k, preview_chars=0)
         treffer = res.get("results") or []
         if not treffer:
             raise Ablehnung(404, "srv.answer.nohits")
@@ -3652,6 +3710,8 @@ def serve(app, port, open_browser=True, host="127.0.0.1", fixed=False):
     # Where this profile answers – for the MCP server's links into the page;
     # not written when the file names another instance that still answers.
     instance.write(HEIM, port, PROFIL)
+    # Files staged for an upload nobody made: gone once a day old.
+    uploads.sweep(HEIM)
     app.log_token_state()
     if _UMZUG.get("bewegt"):
         app.jobs.logk("srv.layout.moved", "info", path=_UMZUG["nach"])

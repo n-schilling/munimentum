@@ -62,10 +62,10 @@ because any one source can mean tens of thousands of items.
 | **To Do** | one `list.html` per list: open and done tasks with steps, dates, notes, attachments |
 | **OneNote** | every page as standalone HTML with its images and attachments, notebook by notebook |
 | **Organization** | a chip on the Teams card: who reports to whom across the tenant, as Teams' profile card shows it – a manager who left kept in the line – kept as one file whose every change is a version; downloadable as CSV with each person's company; needs `User.Read.All`, which some tenants grant only with an admin's consent |
+| **Added by hand** | what Microsoft 365 does not hold – a scanned letter, a contract, a mail handed over as a file: an `.eml`, `.ics` or `.vcf` is read as mail, appointment or contact, any other file is found by the title, date, people and description you type (its content is not read); a note can go with all files or with each; kept apart from Microsoft's, marked *added by hand* – a filter of its own in the search and an entry of *Files* –, taken in by a run of its own |
 
 Every run asks Microsoft only for what changed and counts only that as new.
-Deleted items stay in the archive with a marker — that is the point of keeping
-one — and nothing in it is ever deleted by a run: a replaced file keeps its
+Deleted items stay in the archive with a marker — that is the point of keeping one — and nothing in it is ever deleted by a run: a replaced file keeps its
 **earlier version**, and a **chain of checksums** records what lay here when. A
 run shows progress, steps and log in its window. Which folders, chats and lists
 come along is a list of include and exclude rules per source (*Show export
@@ -82,14 +82,14 @@ Only Search searches; the rest hand it source, month, folder or person.
 that actually occur, best matches first — a phrase in quotes must occur as
 it stands; *Similar search* finds related wording; *AI answer* answers a
 question in a paragraph with source numbers. The last two need
-[Ollama](#optional-ollama). Filters are a row of pills: person, source,
+[Ollama](#optional-ollama). Filters are a row of pills: person, source (several at once),
 date, folder, file type, case, internal or external parties, items no
-longer at Microsoft, mails with an attachment, and the lines *From*, *To*,
+longer at Microsoft, what was added by hand, mails with an attachment, and the lines *From*, *To*,
 *Cc*, *Bcc* for mail. Nothing searches until you press *Search*.
 
 A chosen hit opens on the right with the facts its kind is known by — a mail
 its lines, folder and attachments, each a download — then *Open original*,
-*Add to case*, *Find similar*, *Save as PDF* (mail, appointment, contact, to hand on: facts and text – a mail with its quoted history, HTML as text, attachments by name – ending with the original's name, SHA-256 and export time), a link to copy, and the content; below it,
+*Add to case*, *Find similar*, *Note* (your own note on the item, earlier wordings kept; MCP clients read it), *Save as PDF* (mail, appointment, contact, to hand on: facts and text – a mail with its quoted history, HTML as text, attachments by name – ending with the original's name, SHA-256 and export time), a link to copy, and the content; below it,
 its **versions**, a conversation and a file's checksums, each in a fold;
 *List* clicked again gives it the whole width. **History** keeps each search by
 its criteria, never its hits; **Saved** keeps them under a name, with the
@@ -116,7 +116,7 @@ and *Whole result into a case…* takes all of them.
 
 A case has a **casebook** of short dated notes, **folders** one level deep,
 a filter field, three views — *Folders*, *Timeline*, *People* — and a
-**remark** on every item saying why it is there. A saved search attached to
+**remark** on every item saying why it is there – written in one window with the item's note. A saved search attached to
 it says what it finds today that the case lacks — or, switched to
 **automatic**, files that by itself with every run that updates the index.
 Changed items are marked; *Compare* shows the version they came with.

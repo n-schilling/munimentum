@@ -185,12 +185,13 @@ def baue(store, ordner):
 
         out["dateien"] = {
             "n": je_quelle.get("datei", 0), "pages": je_quelle.get("pages", 0),
-            "onedrive": 0, "sharepoint": 0, "teams": 0, "verschwunden": None}
+            "onedrive": 0, "sharepoint": 0, "teams": 0, store_layout.UPLOADS_ROOT: 0, "verschwunden": None}
         if "root" in spalten:
             for wurzel, n in con.execute(
                     "SELECT root, COUNT(DISTINCT uid) FROM chunks "
                     "WHERE src = 'datei' GROUP BY root"):
-                if wurzel in ("onedrive", "sharepoint", "teams"):
+                # … and the plain files added by hand: files of the archive, no mirror's.
+                if wurzel in ("onedrive", "sharepoint", "teams", store_layout.UPLOADS_ROOT):
                     out["dateien"][wurzel] = n
         if "gone" in spalten:
             out["dateien"]["verschwunden"] = con.execute(

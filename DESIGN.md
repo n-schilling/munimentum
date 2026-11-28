@@ -117,7 +117,18 @@ Each rule is one sentence and the reason behind it.
 **Build archive**: a status card with one line and the primary button
 (the three-step first start on an empty archive), then one source card
 per source — name, `(i)` with the state, gear, chips for its categories,
-nothing below the chips but an actionable warning.
+nothing below the chips but an actionable warning – a mere caution (channels grow large) sits inside its chip while that is ticked: a small mark and two muted words, the sentence on the mouseover. The last card, *Added
+by hand*, is no source of Microsoft's and has no tick: one action, *Add
+files…*, opens the one window that takes files, says what each is read as
+(a mail, an appointment and a contact card need no word; a plain file
+offers title, date, people and description in a closed fold on its card
+– what matters in the window is which files come and what each is read
+as, everything typed is optional and says so), and ends in a run. What
+came in that way carries the mark *added by hand* on every hit, has a
+filter pill of its own in the search – where an item comes from is
+another question than its source, so the two combine – and is an entry
+of *Files*. The *Source* pill takes several values: its list stays open
+while they are ticked, and the pill names one, two, or how many.
 
 **Explore archive**: first the strip of the five ways (`#sichten`, with
 icons). *Search* owns the search row — one field with the mode switch
@@ -196,6 +207,16 @@ with chosen; a closed case says in one line under its head that its
 state was recorded, and whether the chain holds it and a service signed
 it.
 
+**A note** is the keeper's own word about one item,
+whatever its source: one window (`noteDialog`) with a field, *Save*,
+*Remove* and a closed fold of earlier wordings – opened by *Note* among
+the detail's actions, where the note then stands below the facts. A
+case's row has ONE button for words: the same window with a second
+field, the remark in this case; the note only marks the button there,
+the remark stands in the row. The upload window keeps the note in a closed
+fold above the list: one note for all files or, chosen there, a slim
+field on every file; either becomes each item's own note.
+
 **Insights** has the shape of **Settings**: a side navigation, one card
 per entry, the two checks with a dot on their entry – the archive check
 ends in the *Evidence* row, the chain's state and its deviations.
@@ -265,7 +286,7 @@ Use the existing class; do not invent a sibling that looks almost the same.
 | Version | `.version-bar`, `.version-body` | the bar over a chosen version; `del`/`ins` in the body with the `--diff-*` tokens |
 | Empty state | `.leer` | two `.card.liste` groups of `.hist` rows with a `.gruppe-kopf` each |
 | History row | `.hist` | title, criteria as `.tag`s, time or last run; with `.knoepfe` in the windows |
-| Tag / mark | `.tag`, `.tag.extern`, `.tag.weg`, `.tag.mcp`, `.im-fall` | source, external, deleted – and changed since taken into a case –, via MCP, in a case |
+| Tag / mark | `.tag`, `.tag.extern`, `.tag.weg`, `.tag.mcp`, `.tag.added`, `.im-fall` | source, external, deleted – and changed since taken into a case –, via MCP, added by hand or here, in a case |
 | Address tree / list | `.addr-box`, `.addr-node`, `.addr-chip` | a site, or an address list, as a box; one row per address with its cadence, *Sync now* and ×; the chips say *whole site*, *whole library*, *only its N folder addresses*, *listed twice* |
 | Status dot / state line | `.dot.ok/.warn/.err` / `.stand` | always next to a word |
 | Info | `.info` | 17 px circle; text in `data-i18n-title` |

@@ -24,6 +24,9 @@ from tests.ui.helpers import hit_title, open_app, open_calendar, texts
 
 pytestmark = pytest.mark.ui
 
+# Every mail the archive holds: the mailbox's, and the one added by hand.
+MAILS_IN_ARCHIVE = len(sources.MAILS) + sources.UPLOADED_MAILS
+
 EN = texts("en")
 PROJECT = people.PROJECT
 DANA = people.EXTERNALS[0]
@@ -80,6 +83,9 @@ def choose(page, key, label):
     """A pill whose popover is a list of values – source, folder, type…"""
     open_pill(page, key)
     page.locator(f"#pl-{key}").get_by_text(label, exact=True).first.click()
+    if key == "source":
+        # Several sources may be ticked, so this list stays open: leave it as a user does.
+        page.keyboard.press("Escape")
     expect(page.locator(f"#p-{key}")).to_have_class("pill on")
 
 
@@ -146,7 +152,7 @@ def test_a_search_without_words_is_the_filter_alone(archive_page, archive):
         assert EN["search.source.outlook"] in tags_of(hits.nth(i))
     # The page is a page: without a word the filter admits every mail the
     # export wrote, and the whole result says so.
-    assert whole(archive_page) == len(sources.MAILS)
+    assert whole(archive_page) == MAILS_IN_ARCHIVE
 
 
 # --------------------------------------------------------------------------
@@ -243,7 +249,7 @@ def test_the_parties_filter_separates_inside_from_outside(archive_page, archive)
     search(archive_page)
     innen = whole(archive_page)
     assert aussen and innen, (aussen, innen)
-    assert aussen + innen >= len(sources.MAILS)
+    assert aussen + innen >= MAILS_IN_ARCHIVE
 
 
 # --------------------------------------------------------------------------
@@ -407,14 +413,14 @@ def test_the_timeline_puts_the_whole_result_in_date_order(archive_page, archive)
     expect(strip.locator('[data-result-view="list"]')).to_have_class("sicht on")
     switch_view(archive_page, strip, "timeline", "timeline")
     rows = archive_page.locator("#results .zeit")
-    expect(rows).to_have_count(min(ROWS, len(sources.MAILS)))
+    expect(rows).to_have_count(min(ROWS, MAILS_IN_ARCHIVE))
     assert shown(archive_page) == EN["search.whole.count"].format(
-        n=figure(len(sources.MAILS)))
+        n=figure(MAILS_IN_ARCHIVE))
     expect(archive_page.locator("#pager")).to_be_hidden()
     # Two hundred rows are drawn, the rest waits behind one button.
-    if len(sources.MAILS) > ROWS:
+    if MAILS_IN_ARCHIVE > ROWS:
         archive_page.locator("#results .mehr button").click()
-    expect(rows).to_have_count(len(sources.MAILS))
+    expect(rows).to_have_count(MAILS_IN_ARCHIVE)
     # Oldest first: the first row is the oldest mail, the newest comes last.
     oldest = min(sources.MAILS, key=lambda m: m["when"])
     newest = max(sources.MAILS, key=lambda m: m["when"])
@@ -434,7 +440,7 @@ def test_the_timeline_puts_the_whole_result_in_date_order(archive_page, archive)
         expect(archive_page.locator("#result-activity")).to_contain_text(
             EN["timeline.showall"])
         archive_page.locator("#result-activity").get_by_text(EN["timeline.showall"]).click()
-        expect(archive_page.locator("#results .zeit")).to_have_count(len(sources.MAILS))
+        expect(archive_page.locator("#results .zeit")).to_have_count(MAILS_IN_ARCHIVE)
     # A row opens the detail at the right, as a hit of the list does.
     archive_page.locator("#results .zeit").first.click()
     detail = archive_page.locator("#detail")
@@ -473,3 +479,56 @@ def test_the_people_of_a_result_stand_by_their_last_contact(archive_page, archiv
     expect(archive_page.locator("#pw-person")).to_contain_text(DANA[0])
     expect(strip.locator('[data-result-view="timeline"]')).to_have_class("sicht on")
     expect(archive_page.locator("#results .zeit")).to_have_count(MAILS_NAMING_DANA)
+
+
+def test_what_was_added_by_hand_is_a_filter_of_its_own_and_says_so_on_the_hit(archive_page, archive):
+    """The archive holds one of each kind that did not come from Microsoft:
+    the filter "Added by hand" lists exactly those, each as the kind it is,
+    each marked. It says where an item comes from, so it combines with the
+    source – and the source takes several at once."""
+    open_app(archive_page, archive, tab="suche")
+    open_pill(archive_page, "added")
+    archive_page.check("#f-added")
+    search(archive_page)
+    assert whole(archive_page) == len(sources.upload_files())
+    archive_page.locator('#result-views [data-result-view="list"]').click()     # the list is there already
+    rows = archive_page.locator("#results .hit")
+    expect(rows).to_have_count(len(sources.upload_files()))
+    expect(archive_page.locator("#results .hit .tag.added")).to_have_count(len(sources.upload_files()))
+    titles = {sources.UPLOAD_MAIL["subject"], sources.UPLOAD_EVENT["summary"], sources.UPLOAD_CARD["fn"],
+              sources.UPLOAD_SCAN["title"]}
+    assert {hit_title(rows.nth(i)) for i in range(rows.count())} == titles
+    # With the source Calendar: the appointments added by hand – one.
+    choose(archive_page, "source", EN["search.source.kalender"])
+    search(archive_page)
+    expect(rows).to_have_count(1)
+    assert hit_title(rows.first) == sources.UPLOAD_EVENT["summary"]
+    # A second source joins the first: the pill names both, and the card comes back.
+    open_pill(archive_page, "source")
+    archive_page.locator("#pl-source").get_by_text(EN["search.source.kontakte"], exact=True).click()
+    archive_page.keyboard.press("Escape")
+    expect(archive_page.locator("#pw-source")).to_have_text(
+        f'{EN["search.source.kalender"]}, {EN["search.source.kontakte"]}')
+    search(archive_page)
+    assert {hit_title(rows.nth(i)) for i in range(rows.count())} == {sources.UPLOAD_EVENT["summary"], sources.UPLOAD_CARD["fn"]}
+    # Without the filter the two sources are what they hold: far more than two.
+    open_pill(archive_page, "added")
+    archive_page.uncheck("#f-added")
+    search(archive_page)
+    assert whole(archive_page) > 100
+    # The plain file: found by a word of its description, shown with what was typed, a file – not "OneDrive".
+    search(archive_page, archive, term="landlord's stamp")
+    scan = archive_page.locator("#results .hit").filter(has_text=sources.UPLOAD_SCAN["title"])
+    expect(scan.locator(".tag").first).to_have_text(EN["upload.file"])
+    scan.click()
+    detail = archive_page.locator("#detail")
+    expect(detail.locator(".dkopf .tag.added")).to_have_text(EN["upload.tag"])
+    facts = archive_page.locator("#detail-fakten")
+    expect(facts).to_contain_text(sources.UPLOAD_SCAN["name"])
+    expect(facts).to_contain_text(sources.UPLOAD_SCAN["date"])
+    expect(archive_page.locator("#detail-text")).to_contain_text("two pages")
+    # The mail added by hand is a mail among the mails – and still marked.
+    search(archive_page, archive, term="countersigned courier")
+    mail = archive_page.locator("#results .hit").filter(has_text=sources.UPLOAD_MAIL["subject"])
+    expect(mail.locator(".tag").first).to_have_text(EN["search.source.outlook"])
+    expect(mail.locator(".tag.added")).to_be_visible()

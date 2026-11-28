@@ -1439,6 +1439,70 @@ def write_organization(root):
 
 
 # ---------------------------------------------------------------------------
+# Added by hand (uploads.py): what did not come from Microsoft – one of
+# each kind. A letter that arrived as a file, the notary's appointment, the
+# notary's card, and a scan that is found by what was typed about it.
+# ---------------------------------------------------------------------------
+UPLOAD_SCAN = {"name": "Lease second site.pdf", "bytes": b"%PDF-1.4\n% a scan, two pages\n",
+               "title": "Signed lease for the second site", "date": f"{people.YEAR}-05-20",
+               "people": "Greta Gast", "description": "Scan of the signed lease, two pages. The landlord's stamp is on page two."}
+UPLOAD_MAIL = {"name": "letter from the landlord.eml", "subject": "Lease: countersigned copy",
+               "frm": ("Greta Gast", "greta.gast@example.com"), "when": people.day(5, 21, 10, 15),
+               "body": "Dear Alice,\n\nthe countersigned lease went out by courier today.\n\nGreta"}
+UPLOAD_EVENT = {"name": "notary.ics", "summary": "Notary appointment for the lease", "when": people.day(6, 24, 9, 0)}
+UPLOAD_CARD = {"name": "landlord.vcf", "fn": "Lars Landlord", "org": "Hafenkante Immobilien", "mail": "lars.landlord@example.org"}
+
+
+def _upload_mail():
+    mail = UPLOAD_MAIL
+    return (f"From: {mail['frm'][0]} <{mail['frm'][1]}>\r\nTo: {people.ME[0]} <{people.ME[1]}>\r\n"
+            f"Subject: {mail['subject']}\r\nDate: {mail['when'].strftime('%a, %d %b %Y %H:%M:%S')} +0000\r\n"
+            f"Message-ID: <upload-lease@example.com>\r\nContent-Type: text/plain; charset=utf-8\r\n\r\n"
+            f"{mail['body']}\r\n").encode()
+
+
+def upload_files():
+    """(kind, name, bytes) of what was added by hand."""
+    stamp = UPLOAD_EVENT["when"].strftime("%Y%m%dT%H%M%SZ")
+    event = (f"BEGIN:VCALENDAR\r\nVERSION:2.0\r\nBEGIN:VEVENT\r\nUID:upload-notary\r\n"
+             f"SUMMARY:{UPLOAD_EVENT['summary']}\r\nDTSTART:{stamp}\r\nDTEND:{stamp[:9]}100000Z\r\n"
+             f"END:VEVENT\r\nEND:VCALENDAR\r\n").encode()
+    card = (f"BEGIN:VCARD\r\nVERSION:3.0\r\nFN:{UPLOAD_CARD['fn']}\r\nORG:{UPLOAD_CARD['org']}\r\n"
+            f"EMAIL:{UPLOAD_CARD['mail']}\r\nUID:upload-landlord\r\nEND:VCARD\r\n").encode()
+    return [("mail", UPLOAD_MAIL["name"], _upload_mail()), ("event", UPLOAD_EVENT["name"], event),
+            ("contact", UPLOAD_CARD["name"], card), ("file", UPLOAD_SCAN["name"], UPLOAD_SCAN["bytes"])]
+
+
+# What the uploads add to a count over the whole archive: one mail.
+UPLOADED_MAILS = 1
+
+
+def upload_rel(kind):
+    """Where the uploaded file of a kind lies below the uploads folder."""
+    import uploads
+    import versions
+    name, data = next((n, d) for k, n, d in upload_files() if k == kind)
+    return uploads.target_rel(kind, name, versions.sha256_bytes(data))
+
+
+def write_uploads(root):
+    """The files as the upload step leaves them (uploads.take_in): each in
+    its kind's folder under a name carrying its checksum, the plain file
+    with what was typed about it beside it."""
+    import uploads
+    import versions
+    written = []
+    for kind, _name, data in upload_files():
+        rel = upload_rel(kind)
+        written.append(write(root / rel, data))
+        if kind == "file":
+            meta = {k: UPLOAD_SCAN[k] for k in ("title", "date", "people", "description", "name")}
+            meta.update(sha256=versions.sha256_bytes(data), added=graph_time(people.day(6, 1, 8, 0)))
+            written.append(write(root / uploads.meta_rel(rel), json.dumps(meta, indent=1, sort_keys=True)))
+    return written
+
+
+# ---------------------------------------------------------------------------
 # All of it
 # ---------------------------------------------------------------------------
 WRITERS = [
@@ -1453,6 +1517,7 @@ WRITERS = [
     (settings.PLANNER_DIR, write_planner),
     (settings.TODO_DIR, write_todo),
     (settings.ONENOTE_DIR, write_onenote),
+    (settings.UPLOADS_DIR, write_uploads),
 ]
 
 

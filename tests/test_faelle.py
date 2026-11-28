@@ -19,8 +19,11 @@ def test_kriterien_haben_eine_form():
                           "person": "Alice", "unbekannt": "x"})
     assert k == {"q": "budget", "mode": "text", "person": "Alice", "source": "all", "from": "",
                  "to": "", "folder": "", "filetype": "", "gone": True, "attachments": False,
-                 "fall": 3, "ordner": None,
+                 "added": False, "fall": 3, "ordner": None,
                  "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
+    # "added by hand" is a switch like it, a filter on its own – and several sources are one value
+    assert faelle.kriterien({"added": "1"})["added"] is True and not faelle.leer({"added": True})
+    assert faelle.kriterien({"source": "outlook,kalender"})["source"] == "outlook,kalender"
     # the attachment switch (13.1) is a boolean like `gone`, and a filter on its own
     assert faelle.kriterien({"attachments": "1"})["attachments"] is True
     assert faelle.kriterien({"attachments": "no"})["attachments"] is False

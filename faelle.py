@@ -29,9 +29,10 @@ and raise on a closed case (FallGeschlossen) – the app turns that into a
 """
 
 import json
-import sqlite3
 from datetime import datetime, UTC
 from pathlib import Path
+
+import profile_db
 
 DB_NAME = "faelle.db"
 OFFEN, ZU = "offen", "zu"
@@ -123,7 +124,7 @@ CREATE TABLE IF NOT EXISTS notizen(
 """
 
 # 11.1 added columns to tables 11.0 created. They are added in place when
-# the file is opened – a column, not a move of data; rows keep everything.
+# the file is opened (profile_db.connect).
 _ERGAENZUNGEN = (("gespeichert", "ordner_id", "INTEGER"), ("eintraege", "ordner_id", "INTEGER"),
                  ("eintraege", "quelle", "TEXT"), ("listen", "ordner_id", "INTEGER"),
                  ("notizen", "quelle", "TEXT"), ("eintraege", "bemerkung", "TEXT"),
@@ -139,6 +140,8 @@ UI, MCP, AUTO = "ui", "mcp", "auto"       # who wrote an item or a note: the pag
 
 _LEER = {"q": "", "mode": "text", "person": "", "source": "all", "from": "",
          "to": "", "folder": "", "filetype": "", "gone": False, "attachments": False,
+         # Only what was added by hand (uploads.py) – whatever its kind.
+         "added": False,
          "fall": None, "ordner": None,
          "party": "all", "mail_from": "", "mail_to": "", "mail_cc": "", "mail_bcc": ""}
 # The four lines of a mail (13.0). `from` and `to` were taken by the date
@@ -179,7 +182,7 @@ def kriterien(daten):
     out["source"] = str(daten.get("source") or "all").strip() or "all"
     mode = str(daten.get("mode") or "text").strip()
     out["mode"] = mode if mode in MODI else _modus_vom_server(mode)
-    for schalter in ("gone", "attachments"):
+    for schalter in ("gone", "attachments", "added"):
         wert = daten.get(schalter)
         out[schalter] = wert if isinstance(wert, bool) else str(wert).lower() in ("1", "true", "ja")
     party = str(daten.get("party") or "all").strip().lower()
@@ -206,7 +209,7 @@ def leer(k):
     """Nothing to remember: no words, no filter."""
     k = kriterien(k)
     return not (k["q"] or k["person"] or k["from"] or k["to"] or k["folder"]
-                or k["filetype"] or k["gone"] or k["attachments"] or k["fall"]
+                or k["filetype"] or k["gone"] or k["attachments"] or k["added"] or k["fall"]
                 or k["source"] != "all" or any(k[m] for m in MAIL))
 
 
@@ -241,15 +244,7 @@ class Fallbuch:
         self.pinner = None
 
     def _connect(self):
-        self.pfad.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(self.pfad, timeout=5)
-        con.row_factory = sqlite3.Row
-        con.executescript(_SCHEMA)
-        for tabelle, spalte, art in _ERGAENZUNGEN:
-            if not any(r[1] == spalte for r in con.execute(f"PRAGMA table_info({tabelle})")):
-                con.execute(f"ALTER TABLE {tabelle} ADD COLUMN {spalte} {art}")
-        con.commit()
-        return con
+        return profile_db.connect(self.pfad, _SCHEMA, _ERGAENZUNGEN)
 
     # -- history -----------------------------------------------------------
     def suche_merken(self, k, treffer=None):

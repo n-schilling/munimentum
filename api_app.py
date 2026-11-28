@@ -16,20 +16,8 @@ import skills_pack
 import version
 
 
-# The status's `auth` node is deprecated – GET /api/v1/access/session
-# answers the same, asked only where it is shown – and goes in 16.0.0.
-# RFC 9745 announces it on every status: since when (an RFC 9651 date,
-# 2026-10-02) and a link to the contract that names the node and the
-# release. The header and the node leave together.
-AUTH_GONE_IN = 16
-AUTH_DEPRECATION = {
-    "Deprecation": "@1790899200",
-    "Link": '</api/v1/openapi>; rel="deprecation"; type="text/yaml"',
-}
-
-
 def status(h, _p, _q, _data):
-    return api.json(h.app.status(), extra=AUTH_DEPRECATION)
+    return api.json(h.app.status())
 
 
 def umgebung(h, _p, _q, _data):

@@ -53,6 +53,7 @@ from datetime import datetime
 
 import i18n
 import evidence
+import store_layout
 import faelle
 import versions
 import version
@@ -68,12 +69,15 @@ ONENOTE_SUFFIX = ".files"        # OneNote: a page's images and attachments
 # names, one per source, so a folder full of exports needs no legend.
 ORDNER = {"outlook": "Outlook", "teams": "Teams", "onedrive": "OneDrive",
           "sharepoint": "SharePoint", "pages": "SharePoint pages",
-          "onenote": "OneNote", "planner": "Planner", "todo": "To Do"}
+          "onenote": "OneNote", "planner": "Planner", "todo": "To Do",
+          store_layout.UPLOADS_ROOT: "Added by hand"}
 
 
 def quelle_key(e):
     """The text key naming an entry's source – the page's own labels,
     files by their mirror (search.source.*)."""
+    if e.get("src") == "datei" and e.get("root") == store_layout.UPLOADS_ROOT:
+        return "upload.file"                     # added by hand: a file of no mirror
     if e.get("src") == "datei":
         return "search.source." + ("sharepoint" if e.get("root") == "sharepoint"
                                    else "teams" if e.get("root") == "teams" else "onedrive")
@@ -591,6 +595,7 @@ def main():
     ap.add_argument("--planner", required=True)
     ap.add_argument("--todo", required=True)
     ap.add_argument("--onenote", required=True)
+    ap.add_argument("--uploads", default="", help="what was added by hand (uploads.py)")
     ap.add_argument("--faelle", required=True, help="the profile's faelle.db")
     ap.add_argument("--fall", required=True, type=int, help="the case's id")
     ap.add_argument("--ziel", required=True, help="the folder to build and pack (zielordner)")
@@ -600,7 +605,8 @@ def main():
     a = ap.parse_args()
     pfade = {"outlook": a.outlook, "teams": a.teams, "onedrive": a.onedrive,
              "sharepoint": a.sharepoint, "pages": a.pages,
-             "planner": a.planner, "todo": a.todo, "onenote": a.onenote}
+             "planner": a.planner, "todo": a.todo, "onenote": a.onenote,
+             store_layout.UPLOADS_ROOT: a.uploads}
     buch = faelle.Fallbuch(a.faelle)
     try:
         zip_pfad, zeilen, fehlt = exportieren(buch, a.fall, pfade, a.ziel, a.lang, a.res,

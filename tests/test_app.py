@@ -3492,8 +3492,6 @@ STATUS_GERUEST = """
    MCP-Schnipsel noch im Status suchte, obwohl er in der Umgebung liegt. */
 function statusGeruest(){
   return {token: S.token, ollama: S.ollama,
-          auth: {signed_in: false, account: null, device: null,
-                 own_registration: false},
           update: {status: 'off', latest: null, url: null, newer: false,
                    ahead: false, error: null, retry_at: null},
           jobs: {busy: false, job: null, last: null, token_expired: false, seq: 0},
@@ -4887,9 +4885,8 @@ def test_main_reicht_argumente_an_serve_weiter(sandbox, monkeypatch):
 # --------------------------------------------------------------------------
 def test_http_status_nennt_den_anmeldemodus(server):
     _, port = server
-    code, r = call(port, "GET", "/api/v1/status")
+    code, au = call(port, "GET", "/api/v1/access/session")
     assert code == 200
-    au = r["auth"]
     assert au["own_registration"] is False
     # The mode and the ids are settings, not state – the status says only
     # what follows from them.
@@ -4900,13 +4897,13 @@ def test_http_status_nennt_den_anmeldemodus(server):
 
 def test_http_session_says_what_the_cache_says(server, sandbox):
     """The sign-in's state on its own route – what the access card shows,
-    nothing of the settings, and the same as the deprecated status node."""
+    nothing of the settings; the status no longer repeats it."""
     _, port = server
     code, r = call(port, "GET", "/api/v1/access/session")
     assert code == 200
     assert r == {"signed_in": False, "account": None, "own_registration": False,
                  "device": None}
-    assert call(port, "GET", "/api/v1/status")[1]["auth"] == r
+    assert "auth" not in call(port, "GET", "/api/v1/status")[1]
 
 
 def test_inherit_is_a_folder_addresss_word_only(server):
@@ -11943,6 +11940,448 @@ setTimeout(function(){
   pruefe(said && said.error.k === 'srv.noindex' && PDF_BUSY === false, 'the refusal: ' + JSON.stringify(said));
   console.log('OK');
 }, 20);
+""")
+
+
+def test_files_are_added_by_hand_in_one_window():
+    _in_node(GRUNDZUSTAND + """
+var sent = [], answers = {
+  'letter.eml': {id: 'a'.repeat(32), name: 'letter.eml', size: 250, kind: 'mail',
+                 facts: {title: 'Handed over on paper', date: '2026-06-02 09:00', people: 'Dana Dienstleister'}},
+  'Scan contract.pdf': {id: 'b'.repeat(32), name: 'Scan contract.pdf', size: 13, kind: 'file', facts: {title: '', date: '', people: ''}}};
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path, opt.body]);
+  var name = decodeURIComponent((/name=([^&]+)/.exec(path) || [])[1] || '');
+  if(path.indexOf('/uploads/staged?') >= 0 && name === 'broken.bin')
+    return Promise.resolve({ok: false, status: 413, json: function(){ return Promise.resolve({ok: false, error: {k: 'srv.upload.toobig', v: {mb: 500}}}); }});
+  if(path.indexOf('/uploads/staged?') >= 0)
+    return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(answers[name]); }});
+  if(path.indexOf('/api/v1/uploads') >= 0 && opt.method === 'POST')
+    return Promise.resolve({ok: true, status: 202, json: function(){ return Promise.resolve({run: '/api/v1/runs/current', count: 2}); }});
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+uploadDialog();
+pruefe(wizardOffen === 'upload' && dyn('upload-list').innerHTML.indexOf(esc(t('upload.empty'))) > 0 && dyn('upload-go').disabled === true,
+       'the empty window: ' + dyn('upload-list').innerHTML);
+uploadChosen([{name: 'letter.eml', size: 250}, {name: 'Scan contract.pdf', size: 13}, {name: 'broken.bin', size: 9}]);
+// While the bytes are on their way nothing can be added.
+pruefe(dyn('upload-go').disabled === true && dyn('upload-list').innerHTML.split(esc(t('upload.sending'))).length - 1 === 3, 'not waiting');
+setTimeout(function(){
+  var list = dyn('upload-list').innerHTML;
+  // The bytes went as they are, one request per file, named by the file.
+  pruefe(sent.filter(function(x){ return x[0] === 'PUT'; }).length === 3 &&
+         sent[0][1].indexOf('/api/v1/uploads/staged?name=letter.eml') >= 0 && sent[0][2].name === 'letter.eml', JSON.stringify(sent));
+  // A mail says what it is itself: shown, not asked for. A plain file asks for what the search finds it by.
+  pruefe(list.indexOf(esc(t('upload.read', {facts: 'Handed over on paper · 2026-06-02 09:00 · Dana Dienstleister'}))) > 0, 'the mail: ' + list);
+  pruefe(list.split('<input').length - 1 === 3 && list.split('<textarea').length - 1 === 1, 'the fields of the one plain file: ' + list);
+  pruefe(dyn('upload-title-2').value === 'Scan contract', 'the title does not start with the name: ' + dyn('upload-title-2').value);
+  // A refusal is said on the file; the others can still be added.
+  pruefe(list.indexOf(esc(t('srv.upload.toobig', {mb: 500}))) > 0 && dyn('upload-go').disabled === false, 'the refused file: ' + list);
+  // What is typed stays typed when the list is drawn again.
+  dyn('upload-description-2').value = 'Scan of the signed contract.';
+  dyn('upload-people-2').value = 'Greta Gast';
+  uploadRemove(3);
+  pruefe(dyn('upload-description-2').value === 'Scan of the signed contract.' && dyn('upload-list').innerHTML.indexOf('broken.bin') < 0,
+         'typed words are lost: ' + dyn('upload-description-2').value);
+  uploadAdd();
+  setTimeout(function(){
+    var body = JSON.parse(sent[sent.length - 1][2] || sent.filter(function(x){ return x[0] === 'POST'; })[0][2]);
+    pruefe(JSON.stringify(body) === JSON.stringify({items: [{id: 'a'.repeat(32)},
+      {id: 'b'.repeat(32), title: 'Scan contract', date: '', people: 'Greta Gast', description: 'Scan of the signed contract.'}]}),
+      'what is added: ' + JSON.stringify(body));
+    // The window closes and the run window takes over.
+    pruefe(wizardOffen === null && LAUF.eigener === true, 'the window stays: ' + wizardOffen);
+    console.log('OK');
+  }, 20);
+}, 20);
+""")
+
+
+def test_people_of_an_uploaded_file_are_offered_from_the_archive_and_a_new_name_is_kept():
+    _in_node(GRUNDZUSTAND + """
+var asked = [], sent = [];
+global.fetch = function(path, opt){
+  opt = opt || {};
+  var answer = statusGeruest(), status = 200;
+  if(path.indexOf('/uploads/staged?') >= 0) answer = {id: 'b'.repeat(32), name: 'scan.pdf', size: 13, kind: 'file', facts: {title: '', date: '', people: ''}};
+  else if(path.indexOf('/api/v1/people?') >= 0){
+    asked.push(path);
+    answer = {items: [{name: 'Greta Gast', messages: 1200}, {name: 'Greta Grün', messages: 3}], total_distinct: 2, total_messages: 1203};
+  }
+  else if(path.indexOf('/api/v1/uploads') >= 0 && opt.method === 'POST'){ sent.push(JSON.parse(opt.body)); status = 202; answer = {run: '/api/v1/runs/current', count: 1}; }
+  return Promise.resolve({ok: true, status: status, json: function(){ return Promise.resolve(answer); }});
+};
+uploadDialog();
+uploadChosen([{name: 'scan.pdf', size: 13}]);
+setTimeout(function(){
+  var field = dyn('upload-people-1'), list = dyn('upload-people-list-1');
+  pruefe(dyn('upload-list').innerHTML.indexOf('oninput="uploadPeopleSuggest(1)"') > 0, 'the field asks nobody');
+  // One letter asks nobody; what is typed after the last comma is the name looked for.
+  field.value = 'G'; uploadPeopleSuggest(1);
+  field.value = 'Bob Baumeister, Gre'; uploadPeopleSuggest(1);
+  setTimeout(function(){
+    pruefe(asked.length === 1 && asked[0].indexOf('contains=Gre') > 0 && asked[0].indexOf('source=all') > 0, 'asked: ' + JSON.stringify(asked));
+    // The archive's names with their counts, then the typed one as a new name.
+    pruefe(UPLOAD_PEOPLE.open && list.innerHTML.indexOf('Greta Gast') > 0 && list.innerHTML.indexOf(zahl(1200)) > 0 &&
+           list.innerHTML.indexOf(esc(t('upload.people.new', {name: 'Gre'}))) > 0 && list.innerHTML.split('<button').length - 1 === 3, list.innerHTML);
+    // A chosen name takes the place of what was typed and leaves room for the next.
+    uploadPeoplePick(0);
+    pruefe(field.value === 'Bob Baumeister, Greta Gast, ' && !UPLOAD_PEOPLE.open && list.innerHTML === '', 'picked: ' + field.value);
+    // A name the archive writes exactly so is no new one; the new row keeps what was typed.
+    field.value = 'Bob Baumeister, Greta Gast, greta grün'; uploadPeopleSuggest(1);
+    setTimeout(function(){
+      pruefe(list.innerHTML.split('<button').length - 1 === 2 && list.innerHTML.indexOf('upload.people.new') < 0 &&
+             list.innerHTML.indexOf(esc(t('upload.people.new', {name: 'greta grün'}))) < 0, 'a known name offered as new: ' + list.innerHTML);
+      field.value = 'Bob Baumeister, Greta Gast, Nora Neu'; uploadPeopleSuggest(1);
+      setTimeout(function(){
+        // The keyboard: down to the last row, Enter takes it; Esc would close the list, not the window.
+        var keys = {prevented: 0};
+        function key(name){ uploadPeopleKey({key: name, preventDefault: function(){ keys.prevented++; }, stopPropagation: function(){}}, 1); }
+        key('ArrowUp'); key('Enter');
+        pruefe(field.value === 'Bob Baumeister, Greta Gast, Nora Neu, ' && keys.prevented === 2 && wizardOffen === 'upload', 'the new name: ' + field.value);
+        uploadAdd();
+        setTimeout(function(){
+          // The comma left for the next name is not kept.
+          pruefe(sent.length === 1 && sent[0].items[0].people === 'Bob Baumeister, Greta Gast, Nora Neu', JSON.stringify(sent));
+          console.log('OK');
+        }, 20);
+      }, 200);
+    }, 200);
+  }, 200);
+}, 20);
+""")
+
+
+def test_one_note_for_all_files_or_one_per_file_goes_with_the_upload():
+    _in_node(GRUNDZUSTAND + """
+var sent = [], answers = {
+  'letter.eml': {id: 'a'.repeat(32), name: 'letter.eml', size: 250, kind: 'mail', facts: {title: 'Handed over on paper', date: '', people: ''}},
+  'scan.pdf': {id: 'b'.repeat(32), name: 'scan.pdf', size: 13, kind: 'file', facts: {title: '', date: '', people: ''}}};
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path, opt.body]);
+  var name = decodeURIComponent((/name=([^&]+)/.exec(path) || [])[1] || '');
+  if(path.indexOf('/uploads/staged?') >= 0)
+    return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(answers[name]); }});
+  if(path.indexOf('/api/v1/uploads') >= 0 && opt.method === 'POST')
+    return Promise.resolve({ok: true, status: 202, json: function(){ return Promise.resolve({run: '/api/v1/runs/current', count: 2}); }});
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+function added(){ return JSON.parse(sent.filter(function(x){ return x[0] === 'POST'; }).pop()[2]).items; }
+uploadDialog();
+pruefe(dyn('upload-notes').innerHTML === '', 'a note field without a file: ' + dyn('upload-notes').innerHTML);
+uploadChosen([{name: 'letter.eml', size: 250}]);
+setTimeout(function(){
+  // One file has one note: a field, no choice.
+  var notes = dyn('upload-notes').innerHTML;
+  pruefe(notes.indexOf('id="upload-note-all"') > 0 && notes.indexOf('upload-note-mode') < 0, 'one file: ' + notes);
+  dyn('upload-note-all').value = 'From the landlord.';
+  uploadChosen([{name: 'scan.pdf', size: 13}]);
+  setTimeout(function(){
+    // From two files on the choice – and what was typed for all stays.
+    notes = dyn('upload-notes').innerHTML;
+    pruefe(notes.indexOf('id="upload-note-mode-all"') > 0 && notes.indexOf(esc(t('upload.note.each'))) > 0 &&
+           dyn('upload-note-all').value === 'From the landlord.', 'two files: ' + notes);
+    pruefe(dyn('upload-list').innerHTML.indexOf('upload-note-') < 0, 'a field per file while one note is for all');
+    // A note per file: a field on every file, a mail too; the one for all is gone.
+    uploadNoteMode('each');
+    var list = dyn('upload-list').innerHTML;
+    pruefe(list.indexOf('id="upload-note-1"') > 0 && list.indexOf('id="upload-note-2"') > 0 &&
+           dyn('upload-notes').innerHTML.indexOf('upload-note-all') < 0, 'a note per file: ' + list);
+    dyn('upload-note-2').value = '  The scan only.  ';
+    // Back and forth keeps both: the choice decides what is sent, not what was typed.
+    uploadNoteMode('all');
+    uploadNoteMode('each');
+    pruefe(dyn('upload-note-2').value === '  The scan only.  ' && UPLOAD.note === 'From the landlord.', 'typed notes are lost');
+    uploadAdd();
+    setTimeout(function(){
+      // Each file its own; a file without one carries none.
+      pruefe(JSON.stringify(added()) === JSON.stringify([{id: 'a'.repeat(32)},
+        {id: 'b'.repeat(32), title: 'scan', date: '', people: '', description: '', note: 'The scan only.'}]), 'a note per file: ' + JSON.stringify(added()));
+      // One note for all becomes each file's own.
+      uploadDialog();
+      uploadChosen([{name: 'letter.eml', size: 250}, {name: 'scan.pdf', size: 13}]);
+      setTimeout(function(){
+        dyn('upload-note-all').value = 'Both from the notary.';
+        uploadAdd();
+        setTimeout(function(){
+          pruefe(added().length === 2 && added().every(function(x){ return x.note === 'Both from the notary.'; }),
+                 'one note for all: ' + JSON.stringify(added()));
+          console.log('OK');
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 20);
+}, 20);
+""")
+
+
+def test_an_items_note_has_one_window_from_the_detail_and_from_a_case_row():
+    _in_node(GRUNDZUSTAND + """
+var KEY = 'mail:<m1@example.com>', sent = [];
+var stored = {key: KEY, text: 'From the landlord.', updated: '2026-11-20T09:00:00Z', versions: 1};
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path, opt.body]);
+  var answer = statusGeruest();
+  if(path.indexOf('/api/v1/notes/keys') >= 0) answer = {items: stored.text ? [KEY] : [], count: stored.text ? 1 : 0};
+  else if(path.indexOf('/api/v1/notes/versions') >= 0)
+    answer = {items: [{text: 'First <b>wording</b>', written: '2026-11-01T09:00:00Z', replaced: '2026-11-20T09:00:00Z'}], count: 1};
+  else if(path.indexOf('/api/v1/notes?') >= 0 && opt.method === 'PUT'){
+    var text = JSON.parse(opt.body).text;
+    stored = {key: KEY, text: text, updated: text ? '2026-11-27T09:00:00Z' : null, versions: stored.versions + 1};
+    answer = stored;
+  }
+  else if(path.indexOf('/api/v1/notes?') >= 0) answer = stored;
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(answer); }});
+};
+function modalHtml(){ return el('modal').innerHTML; }
+// The detail: the note below the facts in the keeper's words, the button beside the other actions.
+DETAIL_HIT = {key: KEY, title: 'Rent', uid: 'outlook:a.eml:0', source: 'outlook'};
+var actions = detailAktionen(DETAIL_HIT, 1, '');
+pruefe(actions.indexOf('id="detail-note-button"') > 0 && actions.indexOf('noteDialog(') > 0 && actions.indexOf(esc(t('note.button'))) > 0, actions);
+pruefe(detailAktionen({title: 'no key yet'}, 1, '').indexOf(esc(t('note.nokey'))) > 0, 'an item without a key takes a note');
+noteShow({text: 'From <the> landlord.', updated: '2026-11-20T09:00:00Z', versions: 0});
+pruefe(dyn('detail-note').innerHTML.indexOf('From &lt;the&gt; landlord.') > 0 && dyn('detail-note').innerHTML.indexOf('item-note') > 0, dyn('detail-note').innerHTML);
+noteShow(undefined);
+pruefe(dyn('detail-note').innerHTML === '', 'no note is still a block');
+// A case's row: the same window, marked while the item carries a note – in a closed case too.
+var row = eintragAktionen({key: KEY, title: 'Rent', id: 11}, false);
+pruefe(row.indexOf('noteDialog(') > 0 && row.indexOf('has-note') < 0 && row.indexOf(esc(t('note.row'))) > 0 && row.split('nur-ikon').length - 1 === 1, row);
+notedLoad().then(function(changed){
+  row = eintragAktionen({key: KEY, title: 'Rent', id: 11}, true);
+  pruefe(changed === true && row.indexOf('has-note') > 0 && row.indexOf(esc(t('note.row.has'))) > 0 && row.split('nur-ikon').length - 1 === 1, 'not marked: ' + row);
+  // The window: the item's title, a field, one Save – built like the remark's.
+  noteDialog(KEY, 'Rent');
+  pruefe(wizardOffen === 'itemnote' && modalHtml().indexOf('id="item-note-text"') > 0 && modalHtml().indexOf('Rent') > 0, modalHtml());
+  setTimeout(function(){
+    pruefe(dyn('item-note-text').value === 'From the landlord.', 'the note is not in the field: ' + dyn('item-note-text').value);
+    var foot = dyn('item-note-foot').innerHTML;
+    pruefe(foot.split('class="act"').length - 1 === 1 && foot.indexOf('noteSave(true)') > 0 &&
+           dyn('item-note-when').innerHTML.indexOf(esc(t('note.written', {when: fmt('2026-11-20T09:00:00Z')}))) > 0, foot);
+    // What it said before: a closed fold, asked for when it opens, shown as text.
+    pruefe(dyn('item-note-versions').innerHTML.indexOf(esc(t('note.versions', {n: 1}))) > 0 &&
+           !sent.some(function(x){ return x[1].indexOf('/notes/versions') >= 0; }), 'the versions are asked unopened');
+    noteVersions(true);
+    setTimeout(function(){
+      pruefe(dyn('item-note-earlier').innerHTML.indexOf('First &lt;b&gt;wording&lt;/b&gt;') > 0, dyn('item-note-earlier').innerHTML);
+      dyn('item-note-text').value = '  From the landlord, page 3.  ';
+      noteSave(false);
+      setTimeout(function(){
+        var put = sent.filter(function(x){ return x[0] === 'PUT'; })[0];
+        pruefe(put[1].indexOf('/api/v1/notes?key=' + encodeURIComponent(KEY)) >= 0 && JSON.parse(put[2]).text === 'From the landlord, page 3.', JSON.stringify(put));
+        // Saved: the window closes, the detail behind it shows the new words.
+        pruefe(wizardOffen === null && dyn('detail-note').innerHTML.indexOf('page 3.') > 0 && NOTED[KEY] === true, 'after saving: ' + dyn('detail-note').innerHTML);
+        // Removing is one link: nothing is left where the item is shown, and the row loses its mark.
+        noteDialog(KEY, 'Rent');
+        setTimeout(function(){
+          noteSave(true);
+          setTimeout(function(){
+            pruefe(JSON.parse(sent.filter(function(x){ return x[0] === 'PUT'; })[1][2]).text === '' && dyn('detail-note').innerHTML === '' && !NOTED[KEY],
+                   'after removing: ' + dyn('detail-note').innerHTML);
+            pruefe(eintragAktionen({key: KEY, title: 'Rent', id: 11}, true).indexOf('has-note') < 0, 'still marked');
+            console.log('OK');
+          }, 20);
+        }, 20);
+      }, 20);
+    }, 20);
+  }, 20);
+});
+""")
+
+
+def test_a_note_is_not_saved_before_it_was_read_and_an_upload_is_added_once():
+    _in_node(GRUNDZUSTAND + """
+var sent = [], hold = [], KEY = 'mail:<m1@example.com>';
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path, opt.body]);
+  var answer = statusGeruest(), status = 200;
+  if(path.indexOf('/uploads/staged?') >= 0){
+    var name = decodeURIComponent((/name=([^&]+)/.exec(path) || [])[1] || '');
+    answer = {id: (name === 'a.pdf' ? 'a' : 'b').repeat(32), name: name, size: 3, kind: 'file', facts: {title: '', date: '', people: ''}};
+  }
+  else if(path.indexOf('/api/v1/uploads') >= 0 && opt.method === 'POST'){ status = 202; answer = {run: '/api/v1/runs/current', count: 1}; }
+  else if(path.indexOf('/api/v1/people?') >= 0) answer = {items: [{name: 'Greta Gast', messages: 5}], total_distinct: 1, total_messages: 5};
+  else if(path.indexOf('/api/v1/notes?') >= 0 && !opt.method)
+    // The note's answer is held back: the window is open before it is read.
+    return new Promise(function(done){ hold.push(function(){ done({ok: true, status: 200, json: function(){
+      return Promise.resolve({key: KEY, text: 'Kept words.', updated: '2026-11-20T09:00:00Z', versions: 0}); }}); }); });
+  return Promise.resolve({ok: true, status: status, json: function(){ return Promise.resolve(answer); }});
+};
+function puts(){ return sent.filter(function(x){ return x[0] === 'PUT' && x[1].indexOf('/notes') > 0; }); }
+function posts(){ return sent.filter(function(x){ return x[0] === 'POST' && x[1].indexOf('/api/v1/uploads') >= 0; }); }
+// Save pressed while the note is still on its way: the empty field must not remove it.
+noteDialog(KEY, 'Rent');
+noteSave(false);
+pruefe(puts().length === 0 && wizardOffen === 'itemnote', 'saved before the note was read: ' + JSON.stringify(puts()));
+hold.shift()();
+setTimeout(function(){
+  pruefe(dyn('item-note-text').value === 'Kept words.', 'the note did not arrive');
+  // Unchanged words write nothing; the window just closes.
+  noteSave(false);
+  setTimeout(function(){
+    pruefe(puts().length === 0 && wizardOffen === null, 'unchanged words were written: ' + JSON.stringify(puts()));
+    // Two files, a note on each; one is taken out: the other keeps its own note as the one there is.
+    uploadDialog();
+    uploadChosen([{name: 'a.pdf', size: 3}, {name: 'b.pdf', size: 3}]);
+    setTimeout(function(){
+      uploadNoteMode('each');
+      dyn('upload-note-1').value = 'Note on a.';
+      dyn('upload-note-2').value = 'Note on b.';
+      uploadRemove(1);
+      pruefe(UPLOAD.note === 'Note on b.' && dyn('upload-note-all').value === 'Note on b.', 'the remaining note is lost: ' + UPLOAD.note);
+      // A suggestion that answers after the field was left opens nothing.
+      dyn('upload-people-2').value = 'Gre';
+      uploadPeopleSuggest(2);
+      uploadPeopleClose();
+      setTimeout(function(){
+        pruefe(!UPLOAD_PEOPLE.open && dyn('upload-people-list-2').innerHTML === '', 'a late answer opened the list');
+        // Two clicks are one upload.
+        uploadAdd(); uploadAdd();
+        setTimeout(function(){
+          pruefe(posts().length === 1 && JSON.parse(posts()[0][2]).items[0].note === 'Note on b.', JSON.stringify(posts()));
+          pruefe(wizardOffen === null && LAUF.eigener === true, 'the window stays');
+          console.log('OK');
+        }, 20);
+      }, 250);
+    }, 20);
+  }, 20);
+}, 20);
+""")
+
+
+def test_a_files_own_note_survives_one_file_being_alone_and_files_added_by_hand_hand_over_as_files():
+    _in_node(GRUNDZUSTAND + """
+var sent = [];
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path, opt.body]);
+  var answer = statusGeruest(), status = 200;
+  if(path.indexOf('/uploads/staged?') >= 0){
+    var name = decodeURIComponent((/name=([^&]+)/.exec(path) || [])[1] || '');
+    answer = {id: name.charAt(0).repeat(32), name: name, size: 3, kind: 'file', facts: {title: '', date: '', people: ''}};
+  }
+  else if(path.indexOf('/api/v1/uploads') >= 0 && opt.method === 'POST')
+    return Promise.reject(new Error('the app is gone'));
+  return Promise.resolve({ok: true, status: status, json: function(){ return Promise.resolve(answer); }});
+};
+uploadDialog();
+uploadChosen([{name: 'a.pdf', size: 3}, {name: 'b.pdf', size: 3}]);
+setTimeout(function(){
+  uploadNoteMode('each');
+  dyn('upload-note-1').value = 'Note on a.';
+  uploadRemove(2);
+  // Alone, its note is the one field – changed there, it stays the file's.
+  pruefe(dyn('upload-note-all').value === 'Note on a.', 'not carried: ' + dyn('upload-note-all').value);
+  dyn('upload-note-all').value = 'Note on a, reworded.';
+  uploadChosen([{name: 'c.pdf', size: 3}]);
+  setTimeout(function(){
+    // A second file again: each has its own field, and a's is what was last typed for it.
+    pruefe(dyn('upload-list').innerHTML.indexOf('id="upload-note-1"') > 0 && dyn('upload-note-1').value === 'Note on a, reworded.' &&
+           dyn('upload-note-3').value === '', 'the note did not come back to its file: ' + dyn('upload-note-1').value);
+    // The app does not answer: said, and the button works again.
+    uploadAdd();
+    setTimeout(function(){
+      pruefe(UPLOAD.adding === false && LAUF.eigener === false && wizardOffen === 'upload' && UPLOAD.items.length === 2, 'stuck after a failed add');
+      // Files › Added by hand hands over as files with the origin's switch – not as a source nobody can choose.
+      el('f-added').checked = false;
+      dateiSicht = {root: 'uploads', path: 'Dateien'};
+      dateienSuchen();
+      pruefe(el('f-source').value === 'datei' && el('f-added').checked === true && el('f-folder').value === '',
+             'handed over as: ' + el('f-source').value + ' / ' + el('f-added').checked + ' / ' + el('f-folder').value);
+      dateiSicht = {root: 'onedrive', path: ''};
+      dateienSuchen();
+      pruefe(el('f-source').value === 'onedrive' && el('f-added').checked === false, 'a mirror hands over differently now: ' + el('f-source').value);
+      // A folder link on an appointment added by hand narrows to that origin too; a mailbox one does not.
+      var link = ordnerLink({source: 'kalender', root: 'uploads', context: 'kalender/Uploaded'});
+      pruefe(link.indexOf("filterOrdner('kalender', 'kalender/Uploaded', true)") > 0, link);
+      pruefe(ordnerLink({source: 'outlook', root: 'outlook', context: 'E-Mail/Inbox'}).indexOf("filterOrdner('outlook', 'E-Mail/Inbox')") > 0, 'a mailbox folder');
+      pruefe(EVIDENCE_ROOTS.uploads_export === 'uploads', 'a finding in the uploads opens nothing');
+      console.log('OK');
+    }, 20);
+  }, 20);
+}, 20);
+""")
+
+
+def test_a_picked_name_with_a_comma_stays_one_and_a_file_taken_out_mid_way_leaves_no_slot():
+    _in_node(GRUNDZUSTAND + """
+var sent = [], release = null;
+global.fetch = function(path, opt){
+  opt = opt || {};
+  sent.push([opt.method || 'GET', path]);
+  if(path.indexOf('/uploads/staged?') >= 0)
+    return new Promise(function(done){ release = function(){ done({ok: true, status: 200, json: function(){
+      return Promise.resolve({id: 'c'.repeat(32), name: 'big.pdf', size: 3, kind: 'file', facts: {title: '', date: '', people: ''}}); }}); }; });
+  return Promise.resolve({ok: true, status: 200, json: function(){ return Promise.resolve(statusGeruest()); }});
+};
+// Names split as the step splits them: a quoted one with its comma is one.
+var parts = uploadPeopleParts('"Beispiel, Alice", Bob Baumeister, Car');
+pruefe(JSON.stringify(parts) === JSON.stringify({before: ['"Beispiel, Alice"', 'Bob Baumeister'], term: 'Car'}), JSON.stringify(parts));
+document.body.innerHTML = '';
+var field = dyn('upload-people-7');
+field.value = 'Bob Baumeister, Beisp';
+UPLOAD_PEOPLE = {n: 7, rows: [{name: 'Beispiel, Alice', count: 3}], active: -1, open: true, timer: null};
+uploadPeoplePick(0);
+pruefe(field.value === 'Bob Baumeister, "Beispiel, Alice", ', 'picked: ' + field.value);
+// A file taken out while its bytes travel: once its slot is known, it is dropped.
+uploadDialog();
+uploadChosen([{name: 'big.pdf', size: 3}]);
+uploadRemove(UPLOAD.items[0].n);
+release();
+setTimeout(function(){
+  pruefe(sent.some(function(x){ return x[0] === 'DELETE' && x[1].indexOf('/uploads/staged/' + 'c'.repeat(32)) >= 0; }), JSON.stringify(sent));
+  pruefe(UPLOAD.items.length === 0, 'the file came back');
+  console.log('OK');
+}, 20);
+""")
+
+
+def test_several_sources_can_be_chosen_and_added_by_hand_is_its_own_filter():
+    _in_node(GRUNDZUSTAND + """
+el('f-source').value = 'all';
+// One source: its name on the pill, the mail lines offered for Mail alone.
+sourceToggle('outlook');
+pruefe(el('f-source').value === 'outlook' && pillWerte().source === t('search.source.outlook') && anhangMoeglich(), 'one source: ' + el('f-source').value);
+// A second one joins it: the value the search takes is the list, in the list's own order.
+sourceToggle('teams');
+pruefe(el('f-source').value === 'teams,outlook' && sourceOne() === 'all', 'two sources: ' + el('f-source').value);
+pruefe(pillWerte().source === t('search.source.teams') + ', ' + t('search.source.outlook'), 'the pill names both: ' + pillWerte().source);
+// Mail is among them: its lines and its attachment switch stay; folders belong to one source and are listed for none.
+pruefe(anhangMoeglich() && searchParams().get('source') === 'teams,outlook' && kriterienAusForm().source === 'teams,outlook', 'what is sent');
+sourceToggle('kalender');
+pruefe(pillWerte().source === t('search.pill.source.n', {n: 3}), 'three are a number: ' + pillWerte().source);
+// The list shows every tick and "all" takes them away.
+var list = el('pl-source').innerHTML;
+pruefe(list.split('class="on"').length - 1 === 3 && list.indexOf('data-source="kalender"') > 0 && list.indexOf('uploads') < 0, list);
+sourceToggle('teams'); sourceToggle('outlook');
+pruefe(el('f-source').value === 'kalender' && !anhangMoeglich(), 'ticks taken away: ' + el('f-source').value);
+// Where an item comes from is another question: it combines with the source.
+el('f-added').checked = true;
+pruefe(searchParams().get('added') === '1' && searchParams().get('source') === 'kalender' && kriterienAusForm().added === true &&
+       pillWerte().added === t('search.pill.added') && filterFelder().indexOf('added') >= 0, 'added by hand is not sent');
+// Stored criteria come back as they were – several sources, the switch – and what is no source is none.
+kriterienAnwenden({source: 'outlook,kalender', added: true});
+pruefe(el('f-source').value === 'outlook,kalender' && el('f-added').checked === true, 'applied: ' + el('f-source').value);
+kriterienAnwenden({source: 'uploads'});
+pruefe(el('f-source').value === 'all' && el('f-added').checked === false, 'an unknown source: ' + el('f-source').value);
+pillLeeren('added'); filterLeeren();
+pruefe(el('f-source').value === 'all' && !el('f-added').checked && !filterFelder().length, 'not cleared');
+console.log('OK');
+""")
+
+
+def test_what_was_added_by_hand_says_so_on_every_hit():
+    _in_node(GRUNDZUSTAND + """
+var mail = {source: 'outlook', root: 'uploads', title: 'x'}, file = {source: 'datei', root: 'uploads', title: 'scan.pdf'};
+// A mail is a mail and a file a file – not "OneDrive" – and both carry the mark of their origin.
+pruefe(quellTag(mail) === t('search.source.outlook') && quellTag(file) === t('upload.file'), quellTag(mail) + ' / ' + quellTag(file));
+pruefe(externMarke(mail).indexOf('class="tag added"') >= 0 && externMarke(mail).indexOf(esc(t('upload.tag'))) > 0, externMarke(mail));
+pruefe(externMarke({source: 'outlook', root: 'outlook'}) === '' && quellTag({source: 'datei', root: 'onedrive'}) === t('search.source.onedrive'),
+       'a mailbox item is marked');
+console.log('OK');
 """)
 
 

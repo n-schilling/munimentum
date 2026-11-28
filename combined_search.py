@@ -621,7 +621,8 @@ def link(path, out_dir):
         return Path(path).as_uri()
 
 
-def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True, now=None, since=None):
+def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True, now=None, since=None,
+                          uploads_dir=None):
     """Deliver calendar, contacts and reconstructed events as plain data.
 
     Paths come as `root` + `rel` (unencoded) instead of a finished link:
@@ -631,7 +632,11 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True, now=None,
     thousands of events bloat the response.
     """
     root = Path(outlook_dir).resolve()
-    if not root.is_dir():
+    # What was added by hand (uploads.py) has the mailbox's shape: its
+    # appointments and cards stand in the same calendar and address book,
+    # under their own root.
+    added = Path(uploads_dir).resolve() if uploads_dir and Path(uploads_dir).is_dir() else None
+    if not root.is_dir() and added is None:
         raise SystemExit(f"Outlook-Export nicht gefunden: {outlook_dir}")
     invites = []
     ghosts, marked, dupes = [], 0, 0
@@ -643,20 +648,28 @@ def collect_calendar_data(outlook_dir, text_cap=600, reconstruct=True, now=None,
     # manifest – and happens solely for the invitations. Whoever builds the
     # calendar just for the events or the contacts would otherwise pay for
     # it without getting anything in return.
+    reconstruct = reconstruct and root.is_dir()
     if reconstruct:
         db = state_db.StateDb(root, MANIFEST_DB)
         try:
             read_outlook(root, root, invites, db)
         finally:
             db.close()
-    cal = read_calendar(root, root, now=now, since=since)
+    cal = read_calendar(root, root, now=now, since=since) if root.is_dir() else []
     if reconstruct:
         ghosts, marked, dupes = reconstruct_events(invites, cal)
-    contacts = read_contacts(root, root)
+    contacts = read_contacts(root, root) if root.is_dir() else []
+    # The same window as the mailbox's series: the index unfolds them alike.
+    uploaded = (read_calendar(added, added, now=now, since=since), read_contacts(added, added)) if added else ([], [])
+    # Only from their own folders (corpus.UPLOAD_CARDS).
+    uploaded = tuple([r for r in part if str(r.get("p") or "").startswith(corpus.UPLOAD_CARDS)] for part in uploaded)
+    for r in uploaded[0] + uploaded[1]:
+        r["root"] = corpus.UPLOADS_ROOT
+    cal, contacts = cal + uploaded[0], contacts + uploaded[1]
 
     recs = cal + ghosts + contacts
     for r in recs:
-        r["root"] = "outlook"
+        r.setdefault("root", "outlook")
         r["rel"] = unquote(r.pop("p", ""))
         r.pop("uid", None)          # only needed for the matching above, ~1 MB
         r.pop("rts", None)          # the slot a moved date stands for – matching only
@@ -714,14 +727,15 @@ def _previous(ziel):
     return {"sigs": set(sigs), "rule": rule, "since": alt.get("since"), "horizon": alt.get("horizon")}
 
 
-def write_calendar_json(outlook_dir, ziel, reconstruct=True, since=None, now=None):
+def write_calendar_json(outlook_dir, ziel, reconstruct=True, since=None, now=None, uploads_dir=None):
     """Write the calendar data to `ziel` (atomically). Returns the counts,
     with `changed` – the records not in the previous file as they are now,
     new or changed – and `removed`, those of the previous file gone. A
     series' date that entered or left with the window – the horizon moves
     with the day, the start with the month – is neither: rule-made records
     count only inside the window both files share."""
-    daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct, now=now, since=since)
+    daten = collect_calendar_data(outlook_dir, reconstruct=reconstruct, now=now, since=since,
+                                  uploads_dir=uploads_dir)
     ziel = Path(ziel)
     before = _previous(ziel)
     jetzt = _signatures(daten["recs"])
@@ -753,7 +767,7 @@ def main():
         return
 
     args = sys.argv[1:]
-    kalender_json = None
+    kalender_json = uploads_dir = None
     # Default from app_config.json, so a standalone call carries the same
     # setting as the app. --no-reconstruct beats it on the command line.
     reconstruct = settings.flag("CALENDAR_RECONSTRUCT", "calendar_reconstruct")
@@ -762,6 +776,9 @@ def main():
     while i < len(args):
         if args[i] == "--json" and i + 1 < len(args):
             kalender_json = args[i + 1]
+            i += 2
+        elif args[i] == "--uploads" and i + 1 < len(args):
+            uploads_dir = args[i + 1]            # what was added by hand (uploads.py)
             i += 2
         elif args[i] == "--no-reconstruct":
             reconstruct = False
@@ -777,7 +794,8 @@ def main():
 
     since = recurrence.months_back(datetime.now(UTC),
                                    settings.number("CALENDAR_MONTHS_BACK", "calendar_months_back", low=0))
-    c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct, since=since)
+    c = write_calendar_json(outlook_dir, kalender_json, reconstruct=reconstruct, since=since,
+                            uploads_dir=uploads_dir)
     # Same result schema as every other subprogram. The file is rebuilt as
     # a whole, but "new" is only what the last build did not have as it is
     # now; the totals stay in the extra.

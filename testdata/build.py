@@ -104,6 +104,7 @@ def run_index(home, exports, store):
             "--planner", str(exports / settings.PLANNER_DIR),
             "--todo", str(exports / settings.TODO_DIR),
             "--onenote", str(exports / settings.ONENOTE_DIR),
+            "--uploads", str(exports / settings.UPLOADS_DIR),
             "--store", str(store), "--no-embeddings"]
     subprocess.run(argv, cwd=str(PROJECT), env=_env(home), check=True,
                    capture_output=True, text=True)
@@ -113,7 +114,8 @@ def run_calendar(home, exports, store):
     """calendar.json, what the calendar and the address book read."""
     argv = [sys.executable, str(PROJECT / "combined_search.py"),
             str(exports / settings.OUTLOOK_DIR),
-            "--json", str(store / "calendar.json"), "--no-reconstruct"]
+            "--json", str(store / "calendar.json"), "--no-reconstruct",
+            "--uploads", str(exports / settings.UPLOADS_DIR)]
     subprocess.run(argv, cwd=str(PROJECT), env=_env(home), check=True,
                    capture_output=True, text=True)
 
@@ -172,6 +174,7 @@ def build(home, *, index=True, clean=True, flat=False):
             run_calendar(home, exports, store)
             case_id = history.case(home, exports, store, earlier)
             history.own_contact(home)
+            history.item_note(home, exports)
             history.archive_report(home, exports, store, lambda argv: run_step(home, argv))
     finally:
         # The profile is written: whoever called this (a test session) goes

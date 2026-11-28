@@ -59,8 +59,8 @@ are deliberate.
   resource handlers — both serve files out of the export folders by design, so
   the boundary matters.
 - Code execution triggered by exported content: a crafted `.eml`, `.html`,
-  `.ics` or `.vcf`, a file mirrored from OneDrive or SharePoint, or a rendered
-  SharePoint page, that runs code while being parsed or while being shown in
+  `.ics` or `.vcf`, a file mirrored from OneDrive or SharePoint, a file added
+  by hand, or a rendered SharePoint page, that runs code while being parsed or while being shown in
   the interface.
 - Anything that moves archive content, tokens or telemetry off the machine.
   The only outbound connections are Microsoft Graph, Microsoft's sign-in (only

@@ -135,7 +135,10 @@ def test_die_quellen_stehen_einmal_in_settings():
     import settings
     assert list(app_mod.EXPORT_ORDNER) == list(settings.QUELLEN)
     assert set(archive_check.PRUEFER) == set(settings.QUELLEN)
-    assert list(mcp_server.QUELLE_ORDNER) == [i for _, i in settings.QUELLEN.values()]
+    # The index's roots: the eight sources' and, beside them, what was added
+    # by hand – no export, no balance row, no check, but a root like theirs.
+    assert list(mcp_server.QUELLE_ORDNER) == [i for _, i in settings.QUELLEN.values()] + ["uploads"]
+    assert settings.ROOTS["uploads"] == settings.UPLOADS_DIR and "uploads" not in settings.QUELLEN
     assert mcp_server.REGISTRY_QUELLE["sharepoint_pages"] == "pages"
     assert {z["ordner"] for z in steps.PRUEFUNGEN} == set(settings.QUELLEN)
 

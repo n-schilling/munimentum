@@ -41,6 +41,10 @@ instance.json
 # register saying which was opened last.
 profiles/
 profiles.json
+# Files added by hand wait here for their run (uploads.py) – in a source
+# start with the flat layout, beside the code.
+upload_staging/
+uploads_export/
 
 AGENTS.md
 

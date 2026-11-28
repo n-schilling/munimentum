@@ -351,7 +351,8 @@ def test_gespeicherte_suchen_laufen_wie_gespeichert(welt):
     assert g["name"] == "Mails von Carla" and g["last_run"] is None and g["case"] is None
     assert g["criteria"] == {"query": "", "mode": "text", "person": "Carla",
                              "source": "outlook", "date_from": "", "date_to": "",
-                             "folder": "", "filetype": "", "only_gone": False, "case": None, "party": "all"}
+                             "folder": "", "filetype": "", "only_gone": False, "case": None, "party": "all",
+                             "added_by_hand": False}
     lauf = mcp_server.run_saved_search("Mails von Carla")
     assert lauf["search"] == "Mails von Carla"
     assert [h["uid"] for h in lauf["results"]] == [UID_M1]      # browse: person + source

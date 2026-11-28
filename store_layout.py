@@ -65,6 +65,11 @@ MAIL_NEU = ("to_ppl", "cc_ppl", "bcc_ppl")
 # archive without a re-read of the rest.
 PARSER = 5
 
+# The root of what the keeper added by hand (uploads.py): an index root
+# like the export folders' names, the folder map's key for it, and the
+# mark every record of it carries. One spelling for every reader.
+UPLOADS_ROOT = "uploads"
+
 
 def parser_stand(store):
     """The reader's generation this index was built with; an index from

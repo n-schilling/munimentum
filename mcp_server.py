@@ -104,6 +104,7 @@ import faelle
 import footers
 import i18n
 import instance
+import item_notes
 import ollama_client
 import organization
 import own_contacts
@@ -691,7 +692,9 @@ _SOURCE_LABEL = {"teams": "Teams", "outlook": "Mail", "datei": "File",
                  "onedrive": "OneDrive", "sharepoint": "SharePoint",
                  "pages": "SharePoint page", "kalender": "Calendar",
                  "kontakte": "Contacts", "planner": "Planner task",
-                 "todo": "To Do task", "onenote": "OneNote page"}
+                 "todo": "To Do task", "onenote": "OneNote page",
+                 # Not from Microsoft: a file the user added by hand.
+                 corpus.UPLOADS_ROOT: "File added by hand"}
 _WHERE_ALL = "1=1"              # _where() with no filters – the unfiltered case
 # What read_source_file hands over as text; everything else is binary and
 # comes back as metadata only.
@@ -828,7 +831,8 @@ def _quelle_cond(quelle):
 
     "onedrive" and "sharepoint" are both src='datei' rows; the stored root
     column separates them. "datei" stays as the umbrella for every file
-    mirror. "teams" means the conversations AND the files next to them –
+    mirror – and for a plain file added by hand. (Where an item comes
+    from is another question than what it is: `added_by_hand` in _where.) "teams" means the conversations AND the files next to them –
     what a chat shared belongs to the chat. Several sources
     ("onedrive,sharepoint") become an OR; no source means no filter.
     """
@@ -1038,8 +1042,13 @@ def _im_fall(con, case, case_folder=""):
 
 def _where(person, dfrom, dto, src, only_gone=False, folder="", filetype="",
            im_fall=False, party="all", mail=None, with_attachments=False,
-           series=False):
+           series=False, added_by_hand=False):
     conds, params = [], []
+    if added_by_hand:
+        # Only what the user added by hand (uploads.py) – a question of
+        # where an item comes from, so it combines with every source: the
+        # appointments added by hand, the mails, the files.
+        conds.append(f"root = '{corpus.UPLOADS_ROOT}'")
     if with_attachments:
         # Only what carries an attachment – `att` holds the names of a
         # mail's real ones (inline images never), and of the files a
@@ -1583,7 +1592,7 @@ def _message_text(con, uid):
 # under, read off settings.QUELLEN, the one table of sources. It also
 # says what the step registry calls each of them, which differs for the
 # SharePoint pages alone.
-QUELLE_ORDNER = {index: f"{index}_dir" for _ordner, index in settings.QUELLEN.values()}
+QUELLE_ORDNER = {index: f"{index}_dir" for index in settings.ROOTS}
 REGISTRY_QUELLE = {quelle: index for quelle, (_ordner, index) in settings.QUELLEN.items()}
 
 
@@ -1636,7 +1645,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
                     folder: str = "", filetype: str = "", case: str = "",
                     case_folder: str = "", party: str = "all",
                     mail_from: str = "", mail_to: str = "", mail_cc: str = "",
-                    mail_bcc: str = "", with_attachments: bool = False) -> dict:
+                    mail_bcc: str = "", with_attachments: bool = False,
+                    added_by_hand: bool = False) -> dict:
     """Search the whole archive – mail, Teams, calendar, contacts, OneDrive and
     SharePoint files, SharePoint pages, Planner tasks, To Do tasks, OneNote
     pages – or any subset of it, or only what one case holds.
@@ -1712,6 +1722,10 @@ def search_messages(query: str, person: str = "", date_from: str = "",
             real ones (inline images such as signature logos do not
             count), the files a card or a page refers to. The hit's
             `attachments` names them.
+        added_by_hand: Only what the user added to the archive by hand –
+            not exported from Microsoft 365 (a hit's `root` is "uploads").
+            Combines with `source`: with "kalender", the appointments
+            added by hand.
         Any of the four means mail: an appointment or a file has no such
             line, so with one set nothing but mail answers – whatever
             `source` says. list_addresses says which addresses stand in
@@ -1736,7 +1750,8 @@ def search_messages(query: str, person: str = "", date_from: str = "",
         von, bis = _zeitraum(date_from, date_to, days)
         where, params = _where(person.strip(), von, bis, source, only_gone, folder,
                                filetype, im_fall, party, mail, with_attachments,
-                               series=_has_table(con, "series_dates"))
+                               series=_has_table(con, "series_dates"),
+                               added_by_hand=added_by_hand)
         try:
             pairs, used = _rank(con, query.strip(), where, params,
                                 max(1, k), max(0, offset), mode)
@@ -1775,7 +1790,7 @@ def similar_messages(cid: int, k: int = 12, preview_chars: int = 200):
 
 def _browse_where(con, person, date_from, date_to, days, source, only_gone,
                   folder, filetype, case, case_folder, party, mail_from,
-                  mail_to, mail_cc, mail_bcc, with_attachments):
+                  mail_to, mail_cc, mail_bcc, with_attachments, added_by_hand=False):
     """The WHERE of a listing without a query – browse_messages and the
     people count share it: the checks that refuse what this index cannot
     answer, then _where. (where, params, error)."""
@@ -1795,7 +1810,8 @@ def _browse_where(con, person, date_from, date_to, days, source, only_gone,
     von, bis = _zeitraum(date_from, date_to, days)
     where, params = _where(person.strip(), von, bis, source, only_gone, folder,
                            filetype, im_fall, party, mail, with_attachments,
-                           series=_has_table(con, "series_dates"))
+                           series=_has_table(con, "series_dates"),
+                           added_by_hand=added_by_hand)
     return where, params, None
 
 
@@ -1804,7 +1820,7 @@ def facet_rows(person: str = "", date_from: str = "", date_to: str = "",
                filetype: str = "", case: str = "", case_folder: str = "",
                party: str = "all", mail_from: str = "", mail_to: str = "",
                mail_cc: str = "", mail_bcc: str = "",
-               with_attachments: bool = False) -> dict:
+               with_attachments: bool = False, added_by_hand: bool = False) -> dict:
     """What a people count needs of every item the filters admit – who,
     the sender's address, the date, the source – with no query and no
     cap. `/api/v1/search/people` reads it when there is no search term:
@@ -1815,7 +1831,7 @@ def facet_rows(person: str = "", date_from: str = "", date_to: str = "",
         where, params, fehler = _browse_where(
             con, person, date_from, date_to, 0, source, only_gone, folder,
             filetype, case, case_folder, party, mail_from, mail_to, mail_cc,
-            mail_bcc, with_attachments)
+            mail_bcc, with_attachments, added_by_hand)
         if fehler:
             return {"error": fehler, "rows": []}
         # An index from before 11.1 carries no addresses – the count
@@ -1840,7 +1856,8 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
                     filetype: str = "", case: str = "", case_folder: str = "",
                     party: str = "all", mail_from: str = "", mail_to: str = "",
                     mail_cc: str = "", mail_bcc: str = "",
-                    with_attachments: bool = False) -> dict:
+                    with_attachments: bool = False,
+                    added_by_hand: bool = False) -> dict:
     """List items by filter, newest first, without a search query.
 
     For "everything from <person> in <month>", "the last week in <folder>",
@@ -1884,13 +1901,15 @@ def browse_messages(person: str = "", date_from: str = "", date_to: str = "",
         mail_bcc: See mail_from – only in mail one sent oneself.
         with_attachments: Only items with an attachment – see
             search_messages.
+        added_by_hand: Only what the user added by hand – see
+            search_messages.
     """
     con = _db()
     try:
         where, params, fehler = _browse_where(
             con, person, date_from, date_to, days, source, only_gone, folder,
             filetype, case, case_folder, party, mail_from, mail_to, mail_cc,
-            mail_bcc, with_attachments)
+            mail_bcc, with_attachments, added_by_hand)
         if fehler:
             return {"error": fehler, "count": 0, "results": []}
         # Plain "DESC" rather than "(ts IS NULL), ts DESC": SQLite sorts NULL
@@ -2130,6 +2149,11 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
     its `text`. More than one means the item changed after it was first
     archived; the chain proves which version lay here when.
 
+    `note`, when there is one, is the user's own note on the item – what
+    they wrote down about it in Munimentum (where it came from, what it
+    is for), with the day it was written. It is their word about the
+    item, not part of the item: quote it as the user's note.
+
     `cite` is how to quote the item: `label` (kind · day · who · title),
     `key`, and what the evidence chain recorded – `sha256`, `captured`,
     `chain_line`, `stamped` (when a time-stamp authority signed the chain
@@ -2155,7 +2179,8 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
         out = {
             "uid": row["uid"],
             "source": row["src"],
-            "source_label": _SOURCE_LABEL.get(row["src"], row["src"]),
+            # What was added by hand says so, whatever its kind.
+            "source_label": _SOURCE_LABEL.get(corpus.UPLOADS_ROOT if row["root"] == corpus.UPLOADS_ROOT else row["src"], row["src"]),
             "who": row["who"],
             "date": row["date"],
             "title": row["title"],
@@ -2173,6 +2198,15 @@ def get_document(uid: str, context_before: int = 0, context_after: int = 0) -> d
         for k in ("uid", "kind", "text"):
             fakten.pop(k, None)
         out["facts"] = fakten
+        # The user's own note on the item (item_notes.py): their word
+        # about it, not part of the item.
+        if out["key"] and STATE.get("faelle_db"):
+            try:
+                note = item_notes.ItemNotes(STATE["faelle_db"]).get(out["key"])
+            except (item_notes.BadValue, sqlite3.Error):
+                note = None
+            if note and note["text"]:
+                out["note"] = {"text": note["text"], "updated": note["updated"]}
         if row["src"] == "datei":
             # The text is name and path; what else is known about a file
             # sits on disk, and the size says whether reading it is worth it.
@@ -2410,7 +2444,9 @@ def read_source_file(source_root: str, path: str, max_chars: int = 100000,
 
     Args:
         source_root: "teams", "outlook", "onedrive", "sharepoint", "pages",
-            "planner", "todo" or "onenote" (the export the file belongs to).
+            "planner", "todo" or "onenote" (the export the file belongs to) –
+            or "uploads": what the user added to the archive by hand, not
+            exported from Microsoft 365. A hit's "root" names it.
         path: Relative path within that export, as returned in a hit's "path"
             or a list_files entry's "rel".
         max_chars: Max bytes to return (default 100000, cap 500000).
@@ -2649,12 +2685,12 @@ _MAIL_ADDRESS = re.compile(r"[\w.+-]+@[\w-]+(?:\.[\w-]+)+")
 _PHONE_NUMBER = re.compile(r"(?<![\w@.])\+?\d[\d /().-]{5,}\d")
 
 
-def _contact_card(rel, name, text):
+def _contact_card(rel, name, text, root="outlook"):
     """One address book entry, field by field – read from its .vcf, which
     keeps the name's parts, the department and each number's kind apart.
     The index row alone (a card whose file is not at hand) gives the name,
     the addresses and the numbers found in its text."""
-    card, (path, _error) = None, _resolve_source("outlook", rel)
+    card, (path, _error) = None, _resolve_source(root or "outlook", rel)
     if path is not None:
         try:
             card = corpus.read_vcard(path.read_text(encoding="utf-8", errors="replace"))
@@ -2699,7 +2735,7 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
     try:
         pat = _wie(query)
         rows = con.execute(
-            "SELECT uid, title, who, ctx, rel, text, ppl FROM chunks "
+            "SELECT uid, title, who, ctx, rel, text, ppl, root FROM chunks "
             "WHERE src = 'kontakte' AND seq = 0 AND (py_lower(title) LIKE ? "
             "ESCAPE '\\' OR ppl LIKE ? ESCAPE '\\' OR py_lower(text) LIKE ? "
             "ESCAPE '\\') ORDER BY title LIMIT ?",
@@ -2707,8 +2743,9 @@ def lookup_contact(query: str, limit: int = 20) -> dict:
     finally:
         con.close()
     kontakte = []
-    for uid, name, _org, ctx, rel, text, _ppl in rows:
-        card = _contact_card(rel, name, text)
+    for uid, name, _org, ctx, rel, text, _ppl, root in rows:
+        # A card added by hand lies under its own root, not the mailbox's.
+        card = _contact_card(rel, name, text, root)
         kontakte.append({"uid": uid, **card, "folder": ctx, "path": rel, "text": text or ""})
     # The contacts added in the app, where Outlook has no card for the address.
     # Outlook's card wins: its addresses come from the mailbox's profile
@@ -2756,10 +2793,10 @@ def _address_book(con):
     says only what it has: an empty field is left out, a list of rows
     repeats it per row otherwise."""
     book = {}
-    for uid, name, rel, text in con.execute(
-            "SELECT uid, title, rel, text FROM chunks "
+    for uid, name, rel, text, root in con.execute(
+            "SELECT uid, title, rel, text, root FROM chunks "
             "WHERE src = 'kontakte' AND seq = 0 ORDER BY title"):
-        card = _contact_card(rel, name, text)
+        card = _contact_card(rel, name, text, root)
         addresses = card.pop("emails")
         card = {"uid": uid, **{field: value for field, value in card.items() if value}}
         for address in addresses:
@@ -3914,7 +3951,8 @@ def list_files(root: str = "", path: str = "") -> dict:
 
     Args:
         root: "" for the entry points, else "onedrive", "sharepoint",
-            "teams" or "planner".
+            "teams", "planner" or "uploads" (plain files the user added by
+            hand, not mirrored from Microsoft 365).
         path: Folder inside that root, as returned by this tool ("" for the
             top level; for planner the board name).
     """
@@ -3924,6 +3962,7 @@ def list_files(root: str = "", path: str = "") -> dict:
             rows = con.execute("SELECT root, rel FROM chunks "
                                "WHERE src = 'datei' AND seq = 0").fetchall()
             eigene = sum(1 for r in rows if r[0] == "onedrive")
+            added = sum(1 for r in rows if r[0] == corpus.UPLOADS_ROOT)
             bibliotheken, teams = {}, {}
             for wurzel, rel in rows:
                 teile = rel.split("/")
@@ -3948,6 +3987,10 @@ def list_files(root: str = "", path: str = "") -> dict:
                 wurzeln.append({"root": "planner", "path": board,
                                 "label": f"Planner: {board}",
                                 "files": len(dateien)})
+            if added:
+                # Not a mirror: the plain files the user added by hand.
+                wurzeln.append({"root": corpus.UPLOADS_ROOT, "path": _UPLOADED_FILES,
+                                "label": _UPLOADED_LABEL, "files": added})
             return {"roots": wurzeln}
         if root == "planner":
             # Attachments are downloaded next to the board, not indexed as
@@ -3964,7 +4007,7 @@ def list_files(root: str = "", path: str = "") -> dict:
         # The fixed prefix depth and the level label travel with the answer:
         # the client renders breadcrumbs generically instead of knowing that
         # SharePoint paths start with site/library.
-        basis = 2 if root in ("sharepoint", "teams") else 0
+        basis = 2 if root in ("sharepoint", "teams") else 1 if root == corpus.UPLOADS_ROOT else 0
         teile = praefix.split("/") if praefix else []
         label = ("/".join(teile[:basis]) if basis and len(teile) >= basis
                  else "OneDrive" if root == "onedrive" else root)
@@ -3975,6 +4018,8 @@ def list_files(root: str = "", path: str = "") -> dict:
         # "Documents" alone would say nothing.
         if root == "sharepoint" and len(teile) >= basis:
             label = f"SharePoint: {label}"
+        if root == corpus.UPLOADS_ROOT:
+            label = _UPLOADED_LABEL
         wo, params = "src = 'datei' AND seq = 0 AND root = ?", [root]
         if praefix:
             wo += " AND rel LIKE ? ESCAPE '\\'"
@@ -4000,6 +4045,9 @@ def list_files(root: str = "", path: str = "") -> dict:
                 "files": dateien[:2000]}
     finally:
         con.close()
+
+
+_UPLOADED_FILES, _UPLOADED_LABEL = corpus.UPLOAD_FOLDER["file"], "Added by hand"
 
 
 _TEAMS_ARTEN = {"1on1": "1:1 chats", "group": "group chats",
@@ -4077,7 +4125,7 @@ def _kriterien_aussen(k):
     return {"query": k["q"], "mode": k["mode"], "person": k["person"], "source": k["source"],
             "date_from": k["from"], "date_to": k["to"], "folder": k["folder"],
             "filetype": k["filetype"], "only_gone": k["gone"], "case": k["fall"],
-            "party": k.get("party", "all")}
+            "party": k.get("party", "all"), "added_by_hand": bool(k.get("added"))}
 
 
 def _suche_aussen(g):
@@ -4098,7 +4146,7 @@ def _mit_kriterien(k, kk, offset=0, preview_chars=200):
                      only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
                      case=str(k["fall"]) if k["fall"] else "",
                      case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
-                     party=k.get("party", "all"))
+                     party=k.get("party", "all"), added_by_hand=bool(k.get("added")))
     if k["q"]:
         return search_messages(query=k["q"], mode=modus, **gemeinsam)
     return browse_messages(**gemeinsam)
@@ -5071,6 +5119,7 @@ def main():
     ap.add_argument("--planner", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--todo", default=None, help=argparse.SUPPRESS)
     ap.add_argument("--onenote", default=None, help=argparse.SUPPRESS)
+    ap.add_argument("--uploads", default=None, help=argparse.SUPPRESS)
     # Model, address and port default to the configuration – resolved in
     # _argumente(), after --profile has said WHICH configuration.
     ap.add_argument("--embed-model", default=None)
@@ -5112,6 +5161,7 @@ def main():
     a.planner = a.planner or str(basis / settings.PLANNER_DIR)
     a.todo = a.todo or str(basis / settings.TODO_DIR)
     a.onenote = a.onenote or str(basis / settings.ONENOTE_DIR)
+    a.uploads = a.uploads or str(basis / settings.UPLOADS_DIR)
 
     # The hard switch. It sits here and not in the tools because the app
     # calls the same functions in-process for its own search – what is
@@ -5152,7 +5202,7 @@ def main():
                  teams_dir=a.teams, outlook_dir=a.outlook,
                  onedrive_dir=a.onedrive, sharepoint_dir=a.sharepoint,
                  pages_dir=a.pages, planner_dir=a.planner,
-                 todo_dir=a.todo, onenote_dir=a.onenote,
+                 todo_dir=a.todo, onenote_dir=a.onenote, uploads_dir=a.uploads,
                  embed_model=a.embed_model, ollama=a.ollama,
                  # The run history and the case book live in the app's home
                  # folder, which the app hands to every subprocess; started

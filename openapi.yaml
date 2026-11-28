@@ -3,7 +3,7 @@ openapi: 3.2.0
 $self: /api/v1/openapi
 info:
   title: Munimentum HTTP API
-  version: 15.3.0
+  version: 16.0.0
   license: { name: Apache-2.0, identifier: Apache-2.0 }
   contact: { name: Munimentum on GitHub, url: https://github.com/n-schilling/munimentum }
   description: |
@@ -1214,6 +1214,7 @@ paths:
         - { name: mail_bcc, in: query, schema: { type: string }, description: "The same for Bcc – which only mail the user sent themselves carries." }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
         - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment – a mail's real ones (inline images do not count), the files a card or a page refers to; the hit's `attachments` names them. The page offers it for mail." }
+        - { name: added, in: query, schema: { type: string }, description: "1/true/ja: only what the keeper added by hand (uploads) – not exported from Microsoft 365; a hit's `root` is `uploads`. Where an item comes from, not what it is: it combines with every `source`." }
         - name: mode
           in: query
           description: |
@@ -1311,6 +1312,7 @@ paths:
         - { name: mail_bcc, in: query, schema: { type: string } }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
         - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment." }
+        - { name: added, in: query, schema: { type: string }, description: "1/true/ja: only what was added by hand." }
         - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical, text, aehnlich, ki] }, description: "How the hits are ranked when there is a query – as on /api/v1/search. A ranking has no natural end, so with `semantic` or `hybrid` the whole result is the best hits up to the cap." }
       responses:
         "200":
@@ -1388,6 +1390,7 @@ paths:
         - { name: mail_bcc, in: query, schema: { type: string } }
         - { name: gone, in: query, schema: { type: string }, description: "1/true/ja: only tombstoned items." }
         - { name: attachments, in: query, schema: { type: string }, description: "1/true/ja: only items with an attachment." }
+        - { name: added, in: query, schema: { type: string }, description: "1/true/ja: only what was added by hand." }
         - { name: mode, in: query, schema: { type: string, default: auto, enum: [auto, hybrid, semantic, lexical, text, aehnlich, ki] }, description: "How the hits are ranked when there is a query – as on /api/v1/search. A ranking has no natural end, so with `semantic` or `hybrid` the whole result is the best hits up to the cap." }
       responses:
         "200":
@@ -2223,6 +2226,7 @@ paths:
                 from: { type: string, format: date }
                 to: { type: string, format: date }
                 source: { type: string, default: all }
+                added: { type: boolean, default: false, description: "Only what was added by hand, as the search's *Added by hand* filter." }
       responses:
         "200":
           description: |
@@ -2755,6 +2759,132 @@ paths:
           content:
             application/problem+json:
               $ref: "#/components/mediaTypes/Problem"
+
+  /api/v1/notes:
+    get:
+      tags: [Explore, GET]
+      operationId: v1GetItemNote
+      summary: The user's note on one item
+      description: |
+        The user's own word about an item of the archive – where it came
+        from, what it is for – whatever its source. It is kept beside the
+        archive, by the item's stable key, and is not part of the item:
+        the original does not change, and a case's remark on the item is
+        another thing. Needs no index. An item without a note answers an
+        empty `text`.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string, maxLength: 2000 }, description: "The item's stable key – `key` of a hit, of a case's item, `cite.key` of the MCP tool get_document." }
+      responses:
+        "200":
+          description: The note.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemNote" }
+        "400":
+          description: "`key` is missing or too long (srv.badparam)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+    put:
+      tags: [Explore, PUT]
+      operationId: v1PutItemNote
+      summary: Write the note on one item
+      description: |
+        Sets the note's text; an empty `text` takes the note away. What it
+        replaces is kept as an earlier version; the same text again changes
+        nothing, not even the note's date.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string, maxLength: 2000 }, description: "The item's stable key – `key` of a hit, of a case's item, `cite.key` of the MCP tool get_document." }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [text]
+              additionalProperties: false
+              properties:
+                text: { type: string, maxLength: 20000 }
+            example: { text: "Handed over by Dana Dienstleister on paper, scanned the same day." }
+      responses:
+        "200":
+          description: The note as it now is.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ItemNote" }
+        "400":
+          description: "`key` is missing or too long, `text` is no text or beyond 20 000 characters, or the body names another field (srv.badparam)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
+
+  /api/v1/notes/keys:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListItemNoteKeys
+      summary: Which items carry a note
+      description: |
+        The stable keys of every item with a note – what a list needs to
+        mark them, and nothing of what the notes say.
+      responses:
+        "200":
+          description: The keys.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  items: { type: array, items: { type: string } }
+                  count: { type: integer }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/notes/versions:
+    get:
+      tags: [Explore, GET]
+      operationId: v1ListItemNoteVersions
+      summary: What the note on an item said before
+      description: |
+        Every wording a change or a removal replaced, newest first, at
+        most 200.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string, maxLength: 2000 }, description: "The item's stable key – `key` of a hit, of a case's item, `cite.key` of the MCP tool get_document." }
+      responses:
+        "200":
+          description: The earlier versions.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [items, count]
+                properties:
+                  count: { type: integer }
+                  items:
+                    type: array
+                    items:
+                      type: object
+                      required: [text, written, replaced]
+                      properties:
+                        text: { type: string }
+                        written: { type: string, description: "When this wording was written (UTC, ISO 8601)." }
+                        replaced: { type: string, description: "When the next one took its place." }
+        "400":
+          description: "`key` is missing or too long (srv.badparam)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
 
   /api/v1/documents/attachments:
     get:
@@ -3623,6 +3753,143 @@ paths:
                   mcp_client: { type: object, description: "The client configuration for an MCP client, http and stdio." }
         "403": { $ref: "#/components/responses/Forbidden" }
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/uploads/staged:
+    put:
+      tags: [Archive, PUT]
+      operationId: v1StageUpload
+      summary: Hand over one file to be added by hand
+      description: |
+        The body is the file's bytes, of any kind and up to 500 MB – the
+        one route whose body is not JSON. They are kept in a staging slot
+        of the profile, not in the archive: `POST /api/v1/uploads` adds
+        what was staged, and a slot nobody adds is dropped after a day.
+        The answer says what the app takes the file for – `mail` (an
+        `.eml`), `event` (an `.ics`), `contact` (a `.vcf`), read as such
+        when they parse, or `file` for everything else – and, for the
+        three, what it reads in it.
+      parameters:
+        - { name: name, in: query, required: true, schema: { type: string }, description: "The file's name; its extension decides what it is read as." }
+      requestBody:
+        required: true
+        content:
+          application/octet-stream:
+            schema: { type: string, format: binary }
+      responses:
+        "200":
+          description: The staged file.
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/StagedUpload" }
+              example:
+                id: 0de72f8f745f4f8a8c1a6f5bcdd9ffd1
+                name: letter.eml
+                size: 250
+                kind: mail
+                facts: { title: Handed over on paper, date: "2026-06-02 09:00", people: Dana Dienstleister }
+        "400":
+          description: No `name` (srv.badparam), no body (srv.upload.empty), no usable Content-Length (srv.badlength), or the bytes stopped early (srv.upload.broken).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "413":
+          description: Larger than 500 MB (srv.upload.toobig); the connection ends.
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "415":
+          description: Never sent by this route – its body may be of any media type; named because every operation with a body names it.
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/uploads/staged/{id}:
+    parameters:
+      - { name: id, in: path, required: true, schema: { type: string, pattern: "^[0-9a-f]{32}$" } }
+    delete:
+      tags: [Archive, DELETE]
+      operationId: v1DiscardStagedUpload
+      summary: Drop a staged file
+      description: The file is not to be added after all; its slot goes.
+      responses:
+        "204": { description: Dropped. }
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "404":
+          description: No such staged file (srv.upload.unknown).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "500": { $ref: "#/components/responses/ServerError" }
+
+  /api/v1/uploads:
+    post:
+      tags: [Archive, POST]
+      operationId: v1AddUploads
+      summary: Add the staged files to the archive
+      x-starts-run: true
+      description: |
+        A run like after an export: its first step moves each staged file
+        into the folder of what was added by hand (apart from what
+        Microsoft delivered), the evidence step chains it, the index is
+        built, and – when an appointment or a contact card came – the
+        calendar file. A mail, an appointment and a card say what they are
+        themselves; a plain `file` is found by what `items` says about it,
+        because a file's content is not read. Everything added carries
+        `root: "uploads"` wherever it appears.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [items]
+              properties:
+                items:
+                  type: array
+                  minItems: 1
+                  items:
+                    type: object
+                    required: [id]
+                    properties:
+                      id: { type: string, description: "The staged file." }
+                      title: { type: string, maxLength: 300, description: "A plain file's title; its name when empty." }
+                      date: { type: string, description: "The day the document is of, `YYYY-MM-DD`, or empty – then the file's own time." }
+                      people: { type: string, maxLength: 1000, description: "Who it is from or about." }
+                      description: { type: string, maxLength: 20000, description: "What it is and says – the words the search finds it by." }
+                      note: { type: string, maxLength: 20000, description: "The user's note on the file, for any kind – it becomes the item's note (`/api/v1/notes`) under the key the index gives the file." }
+            example:
+              items:
+                - { id: 0de72f8f745f4f8a8c1a6f5bcdd9ffd1 }
+                - { id: 08d606e18f664f5d99aac67ab47ae427, title: Signed contract, date: "2026-05-20", people: Dana Dienstleister, description: "Scan of the signed contract, two pages." }
+      responses:
+        "202":
+          description: The run is on; `run` names where to watch it.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [run, count]
+                properties:
+                  run: { type: string, description: "/api/v1/runs/current" }
+                  count: { type: integer, description: "How many files the run takes in." }
+        "400":
+          description: "No `items`, a staged file that is not there, or a value that is none (srv.upload.badvalue, `error.v.field` names it)."
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "403": { $ref: "#/components/responses/Forbidden" }
+        "405": { $ref: "#/components/responses/MethodNotAllowed" }
+        "409":
+          description: A run is in progress (srv.busy).
+          content:
+            application/problem+json:
+              $ref: "#/components/mediaTypes/Problem"
+        "415": { $ref: "#/components/responses/UnsupportedMediaType" }
         "500": { $ref: "#/components/responses/ServerError" }
 
   /api/v1/runs:
@@ -4995,15 +5262,12 @@ paths:
         profile, none named at start) the answer is `{"chooser": true}`
         instead – the page polls until the app answers.
 
-        The `auth` node is deprecated and goes in 16.0.0 – the one field
-        an answer under v1 loses, announced on every answer by the
-        `Deprecation` and `Link` headers (RFC 9745) until then.
+        The sign-in's state is not part of it: `GET /api/v1/access/session`
+        answers that. (The `auth` node that repeated it here was announced
+        as deprecated from 14.1.0 and went in 16.0.0.)
       responses:
         "200":
           description: The state object.
-          headers:
-            Deprecation: { $ref: "#/components/headers/Deprecation" }
-            Link: { $ref: "#/components/headers/DeprecationLink" }
           content:
             application/json:
               schema:
@@ -5031,10 +5295,6 @@ paths:
                     enum: [token, ollama, null]
                     description: Which assistant the app would open – decided here, not in the page.
                   update: { $ref: "#/components/schemas/UpdateState" }
-                  auth:
-                    $ref: "#/components/schemas/AccessSession"
-                    deprecated: true
-                    description: "Deprecated since 14.1.0, removed in 16.0.0: ask GET /api/v1/access/session. Every status answer announces it with `Deprecation` and `Link` (RFC 9745)."
                   profile: { $ref: "#/components/schemas/ProfileState" }
               example:
                 jobs:
@@ -5055,11 +5315,6 @@ paths:
                   url: null
                   error: null
                   retry_at: null
-                auth:
-                  signed_in: true
-                  account: alice.beispiel@nordwind.example
-                  own_registration: false
-                  device: null
         "405": { $ref: "#/components/responses/MethodNotAllowed" }
         "403": { $ref: "#/components/responses/Forbidden" }
         "500": { $ref: "#/components/responses/ServerError" }
@@ -5905,6 +6160,22 @@ components:
         kind: { $ref: "#/components/schemas/SourceKey" }
         text: { type: string, description: "The item's text, as the index holds it." }
         checksums: { $ref: "#/components/schemas/Checksums" }
+        item_note:
+          type: object
+          description: "The user's own note on the item (`/api/v1/notes`); absent while there is none and never was. Not a contact's `note`, which is the card's own."
+          required: [text, versions]
+          properties:
+            text: { type: string }
+            updated: { type: [string, "null"] }
+            versions: { type: integer }
+    ItemNote:
+      type: object
+      required: [key, text, updated, versions]
+      properties:
+        key: { type: string }
+        text: { type: string, description: "The note; empty when the item has none." }
+        updated: { type: [string, "null"], description: "When it was written (UTC, ISO 8601)." }
+        versions: { type: integer, description: "How many earlier wordings are kept." }
     Checksums:
       type: object
       required: [sha256]
@@ -6110,6 +6381,21 @@ components:
             phones: { type: array, items: { $ref: "#/components/schemas/ContactPhone" } }
             emails: { type: array, items: { type: string } }
             urls: { type: array, items: { type: string }, description: "Only for a card added in the app: an Outlook card's links are not read." }
+    StagedUpload:
+      type: object
+      required: [id, name, size, kind, facts]
+      properties:
+        id: { type: string, description: "The slot – what `POST /api/v1/uploads` names the file by." }
+        name: { type: string, description: "The name the file is kept under: the given one, without a path or a character a disk refuses." }
+        size: { type: integer }
+        kind: { type: string, enum: [mail, event, contact, file], description: "What the file is read as." }
+        facts:
+          type: object
+          description: "What the app reads in a mail, an appointment or a card – empty strings for a plain file."
+          properties:
+            title: { type: string }
+            date: { type: string }
+            people: { type: string }
     ContactPhone:
       type: object
       required: [type, number]
@@ -6191,6 +6477,7 @@ components:
         filetype: { type: string }
         gone: { type: boolean }
         attachments: { type: boolean, description: "Only items with an attachment (13.1)." }
+        added: { type: boolean, description: "Only what was added by hand (uploads)." }
         party: { type: string, enum: [all, internal, external] }
         mail_from: { type: string, description: "The mail lines (13.0); they narrow mail only." }
         mail_to: { type: string }
@@ -6268,7 +6555,7 @@ components:
           description: nachrichten, gespraeche, mit_anhang, verschwunden, personen, von, bis (null = index too old to know).
         dateien:
           type: object
-          description: n, pages, onedrive, sharepoint, teams, verschwunden.
+          description: n, pages, onedrive, sharepoint, teams, uploads (plain files added by hand), verschwunden.
         planner: { type: object }
         todo: { type: object }
         onenote: { type: object }
@@ -6320,15 +6607,6 @@ components:
             `ms_confirmed` (how many agree), `versions`, `versions_bytes`,
             `stamped`.
   headers:
-    Deprecation:
-      description: |
-        RFC 9745: part of this answer is deprecated, since the date given
-        (an RFC 9651 date, seconds since 1970). The `Link` beside it points
-        to this contract, which names what goes and in which release.
-      schema: { type: string, example: "@1790899200" }
-    DeprecationLink:
-      description: 'RFC 8288 link with `rel="deprecation"` (RFC 9745) to the contract that says what is deprecated.'
-      schema: { type: string, example: '</api/v1/openapi>; rel="deprecation"; type="text/yaml"' }
     ETag:
       description: |
         The case's entity tag (RFC 9110), weak: a digest of the case as

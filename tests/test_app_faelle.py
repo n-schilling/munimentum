@@ -1409,14 +1409,36 @@ function letzte(pfad, methode, feld){
   // the remark stands under the item; the pen opens its window; the thread button names what is missing
   pruefe(html.indexOf('class="bem"') >= 0 && html.indexOf('Der Beleg') >= 0, 'Bemerkung fehlt in der Zeile');
   pruefe(html.indexOf("threadHolen('mail:") >= 0 && html.indexOf('+2') >= 0 && html.split('threadHolen(').length - 1 === 1, 'Thread-Knopf fehlt oder steht an der falschen Zeile');
-  bemerkungFenster('mail:<m1@example.com>');
-  pruefe(modal.innerHTML.indexOf('id="bemerkung-text"') >= 0 && modal.innerHTML.split('class="act"').length - 1 === 1, 'Bemerkungsfenster unvollstaendig');
-  pruefe(modal.innerHTML.indexOf('bemerkungSenden(true)') >= 0, 'Entfernen fehlt bei bestehender Bemerkung');
-  document.getElementById('bemerkung-text').value = 'Neu gesagt';
-  bemerkungSenden(false);
+  // one button on the row, one window: the note on the item and the remark in this case
+  pruefe(html.indexOf('bemerkungFenster') < 0 && html.indexOf("noteDialog(") >= 0, 'zwei Knoepfe statt einem');
+  noteDialog('mail:<m1@example.com>', 'Rechnung 4711', true);
+  pruefe(modal.innerHTML.indexOf('id="item-note-text"') >= 0 && modal.innerHTML.indexOf('id="bemerkung-text"') >= 0 &&
+         modal.innerHTML.split('class="act"').length - 1 === 1, 'Fenster unvollstaendig: ' + modal.innerHTML);
+  pruefe(modal.innerHTML.indexOf(esc(t('note.field.item'))) >= 0 && modal.innerHTML.indexOf(esc(t('note.field.case'))) >= 0 &&
+         modal.innerHTML.indexOf(esc(t('note.title.case'))) >= 0, 'Felder nicht benannt');
+  pruefe(document.getElementById('bemerkung-text').value === 'Der Beleg' && !document.getElementById('bemerkung-text').disabled, 'Bemerkung nicht im Feld');
   await warte(10);
+  // only the remark changed: the case is written, the note is not
+  document.getElementById('bemerkung-text').value = 'Neu gesagt';
+  noteSave(false);
+  await warte(10);
+  pruefe(!letzte('/api/v1/notes', 'PUT'), 'die Notiz wurde ohne Aenderung geschrieben');
+  pruefe(wizardOffen === null, 'Fenster bleibt offen');
   var bm = letzte('/api/v1/cases/1/items/11', 'PATCH');
   pruefe(bm && bm.body.remark === 'Neu gesagt', 'Bemerkung nicht geschickt: ' + JSON.stringify(bm && bm.body));
+  // the note could not be read: the remark is saved all the same, the note is left alone
+  await fallOeffnen(1);
+  noteDialog('mail:<m1@example.com>', 'Rechnung 4711', true);
+  NOTE.loaded = false;
+  document.getElementById('bemerkung-text').value = 'Trotzdem gesagt';
+  noteSave(false);
+  await warte(10);
+  pruefe(!letzte('/api/v1/notes', 'PUT'), 'die ungelesene Notiz wurde geschrieben');
+  var bm2 = letzte('/api/v1/cases/1/items/11', 'PATCH');
+  pruefe(bm2 && bm2.body.remark === 'Trotzdem gesagt', 'Bemerkung ohne gelesene Notiz nicht geschickt');
+  // … and the window stays, saying why: what was typed for the note is not lost
+  pruefe(wizardOffen === 'itemnote' && el('meldung').textContent === t('note.unread'), 'still und geschlossen: ' + wizardOffen);
+  closeWizard('itemnote');
   await fallOeffnen(1);
   threadHolen('mail:<m1@example.com>');
   await warte(10);

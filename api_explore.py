@@ -8,6 +8,8 @@ from contextlib import contextmanager
 from pathlib import Path
 
 import re
+import sqlite3
+
 import api
 import corpus
 import detail
@@ -15,6 +17,7 @@ import evidence
 import faelle
 import footers
 import i18n
+import item_notes
 import org_csv
 import organization
 import own_contacts
@@ -366,6 +369,46 @@ def fakten(h, _p, q, _data):
     return api.json(fakten_lesen(h, q))
 
 
+# -- the keeper's note on an item (item_notes.py) ------------------------------
+def _notes(h):
+    return h.app.item_notes
+
+
+def _note_call(fn, *args):
+    try:
+        return fn(*args)
+    except item_notes.BadValue as e:
+        raise Ablehnung(400, "srv.badparam", {"name": e.field}) from None
+
+
+def item_note(h, _p, q, _data):
+    """The note on one item: its text ("" for none), when it was written,
+    how many earlier versions are kept. By the item's stable key."""
+    return api.json(_note_call(_notes(h).get, q.get("key")))
+
+
+def item_note_write(h, _p, q, data):
+    """Write the note on one item; an empty `text` takes it away. What it
+    replaces is kept as an earlier version. Answers the note as it now is."""
+    for field in data:
+        if field != "text":
+            raise Ablehnung(400, "srv.badparam", {"name": str(field)[:40]})
+    return api.json(_note_call(_notes(h).put, q.get("key"), data.get("text")))
+
+
+def item_note_keys(h, _p, _q, _data):
+    """Which items carry a note: their keys, nothing else – what a list
+    needs to mark them."""
+    items = _notes(h).keys()
+    return api.json({"items": items, "count": len(items)})
+
+
+def item_note_versions(h, _p, q, _data):
+    """What the note said before, newest first."""
+    items = _note_call(_notes(h).versions, q.get("key"))
+    return api.json({"items": items, "count": len(items)})
+
+
 def anhang(h, _p, q, _data):
     """One attachment of a mail as a download: the n-th real one
     (1-based), in the order the facts list them – so what the detail
@@ -471,7 +514,7 @@ def search(h, q, merken=True):
               k=api.zahl(q, "k", q.get("limit") or 20, 1, 101),
               offset=api.zahl(q, "offset", 0, 0),
               only_gone=k["gone"], folder=k["folder"], filetype=k["filetype"],
-              party=k["party"], with_attachments=k["attachments"],
+              party=k["party"], with_attachments=k["attachments"], added_by_hand=k["added"],
               # The four mail lines (13.0): they narrow mail, nothing else.
               **{m: k[m] for m in faelle.MAIL},
               # The "Cases" filter: only what one case – or one of its
@@ -519,7 +562,7 @@ def engine_filters(k):
     filters alone, without the query, the mode or the paging."""
     return dict(person=k["person"], date_from=k["from"], date_to=k["to"],
                 source=k["source"], only_gone=k["gone"], folder=k["folder"],
-                filetype=k["filetype"], with_attachments=k["attachments"],
+                filetype=k["filetype"], with_attachments=k["attachments"], added_by_hand=k["added"],
                 case=str(k["fall"]) if k["fall"] else "",
                 case_folder=str(k["ordner"]) if k["fall"] and k["ordner"] else "",
                 party=k["party"],
@@ -775,6 +818,17 @@ def fakten_lesen(h, q):
     checksums = item_checksums(h, row, ziel)
     if checksums:
         facts["checksums"] = checksums
+    # The keeper's own note on the item – beside its facts, not one of them.
+    key = row["key"] if "key" in row.keys() else None
+    try:
+        note = _notes(h).get(key) if key else None
+    except (item_notes.BadValue, sqlite3.Error):
+        # A key no note can stand under, or a store that cannot be read
+        # now: the facts come without the note, never not at all.
+        note = None
+    if note and (note["text"] or note["versions"]):
+        # `item_note`, not `note`: a contact's facts carry the card's own NOTE under that name.
+        facts["item_note"] = {k: note[k] for k in ("text", "updated", "versions")}
     return facts
 
 
@@ -1344,6 +1398,10 @@ ROUTEN = (
     ("GET", "/api/v1/documents", dokument),
     ("GET", "/api/v1/documents/facts", fakten),
     ("GET", "/api/v1/documents/attachments", anhang),
+    ("GET", "/api/v1/notes", item_note),
+    ("PUT", "/api/v1/notes", item_note_write),
+    ("GET", "/api/v1/notes/keys", item_note_keys),
+    ("GET", "/api/v1/notes/versions", item_note_versions),
     ("GET", "/api/v1/documents/pdf", item_pdf),
     ("GET", "/api/v1/documents/versions", item_versions),
     ("GET", "/api/v1/documents/versions/content", version_content),

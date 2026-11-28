@@ -71,8 +71,8 @@ is; with it, they ride along. The *UI* workflow runs them on `main` and on
 every pull request. A failed one leaves a screenshot in `tests/ui/output/`.
 
 Most of them need an archive with something in it, and that archive is
-generated – `testdata/` writes a whole profile with all eight sources
-and an organization, every name and file in it invented. It is not a handful of files but a
+generated – `testdata/` writes a whole profile with all eight sources,
+an organization and four items added by hand, every name and file in it invented. It is not a handful of files but a
 year of traffic: close to four thousand of them, several thousand items,
 fifty series of appointments among them, enough that a result runs over
 pages and a timeline needs its band. You can open it yourself:
@@ -86,7 +86,7 @@ It is the quickest way to see the interface with data in it without touching
 a Microsoft account. It has a past, too (`testdata/history.py`): files with
 an earlier version, an organization a week older than today's, an edited and
 a deleted Teams message, a case whose items changed since they came in, a
-contact added to the address book in the app and filled in since, a file changed by hand – and the chain of checksums over all of it. The
+contact added to the address book in the app and filled in since, a note on the scan added by hand, reworded once, a file changed by hand – and the chain of checksums over all of it. The
 browser tests use the same archive, and that is what lets them go deeper
 than "every page renders": they set the search filters one by one and count
 what comes back, fill a case from the search, order it into folders, write a
@@ -111,7 +111,9 @@ index run writes, and `signature.py` reads the footer under a person's mails
 from the `.eml` files – `footers.py` has every index run read them for the
 people the address book lists and keeps them; `own_contacts.py` keeps the contacts added to the
 address book in the app and what each said before a change – rows in the
-profile's database, never files in an export folder. `pdf_export.py` sets a
+profile's database, never files in an export folder; `item_notes.py` keeps the keeper's note on an item there too, by the item's stable key, with its earlier wordings – they and the case book (`faelle.py`) all open that database through `profile_db.py`, one way in for every table. `uploads.py` takes in what the keeper adds by
+hand – staged in the profile, moved into `uploads_export/` by a run step,
+read by the mailbox's readers under the root `uploads`. `pdf_export.py` sets a
 mail, an appointment or a contact as a PDF to hand on (reportlab, with the
 two DejaVu fonts in `fonts/` embedded – their licence lies beside them). `mcp_server.py` is
 the MCP server; the app's search calls its tools in-process, so what leaves

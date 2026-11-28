@@ -9,6 +9,7 @@ records and splits long texts into overlapping chunks. Used by rag_index.py
 
 import json
 import recurrence
+import store_layout
 import os
 import base64
 import binascii
@@ -1320,10 +1321,101 @@ def _dateien_pages(root):
     return [p for p in sorted(root.rglob("*.html")) if _im_archiv(p, root)]
 
 
+# --------------------------------------------------------------------------
+# What the keeper added by hand (uploads.py): a folder of the mailbox
+# export's shape – E-Mail/, kalender/, kontakte/ – plus Dateien/ for plain
+# files, each with what was typed about it in meta/. The mailbox readers
+# read it; every record says `root: "uploads"`, the mark of its origin.
+# --------------------------------------------------------------------------
+UPLOADS_ROOT = store_layout.UPLOADS_ROOT
+# The uploads folder's layout – the mailbox export's folder names, which
+# the readers know, one folder for plain files and one for what was typed
+# about them. uploads.py writes it, the readers here read it.
+UPLOAD_FOLDER = {"mail": "E-Mail/Uploaded", "event": "kalender/Uploaded",
+                 "contact": "kontakte/Uploaded", "file": "Dateien"}
+UPLOAD_META = "meta"
+# The folders the card readers take from: an .ics or .vcf taken for a plain
+# file (no event, no card in it) lies in Dateien/ and is a file, nothing else.
+UPLOAD_CARDS = tuple(UPLOAD_FOLDER[kind].split("/")[0] + "/" for kind in ("event", "contact"))
+_UPLOAD_MAILS, _UPLOAD_FILES = "E-Mail", UPLOAD_FOLDER["file"]
+
+
+def upload_meta_rel(rel):
+    """The sidecar of an uploaded plain file."""
+    return f"{UPLOAD_META}/{rel.split('/', 1)[1]}.json"
+
+
+def upload_meta(root, rel):
+    """What was typed about an uploaded plain file – {} for none."""
+    try:
+        data = json.loads((Path(root) / upload_meta_rel(rel)).read_text(encoding="utf-8"))
+    except (OSError, ValueError, IndexError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _dateien_uploads(root):
+    """The files the index reads one by one: the mails and the plain
+    files. (Appointments and cards are few and always parsed.)"""
+    mails = sorted((root / _UPLOAD_MAILS).rglob("*.eml")) if (root / _UPLOAD_MAILS).is_dir() else []
+    files = ([p for p in sorted((root / _UPLOAD_FILES).rglob("*")) if p.is_file() and p.suffix != ".tmp"]
+             if (root / _UPLOAD_FILES).is_dir() else [])
+    return mails + files
+
+
+def _as_upload(rec):
+    """A record a mailbox reader made of an uploaded file: its root and
+    its uid say where it lies."""
+    rec["root"] = UPLOADS_ROOT
+    rec["uid"] = UPLOADS_ROOT + ":" + rec["uid"].split(":", 1)[1]
+    return rec
+
+
+def _upload_satz(p_str, root_str):
+    """One uploaded file as a record: a mail as a mail; a plain file by
+    what was typed about it – title, date, people, description – since
+    its content is not read."""
+    p, root = Path(p_str), Path(root_str)
+    rel = p.relative_to(root).as_posix()
+    if rel.startswith(_UPLOAD_MAILS + "/"):
+        rec = _outlook_file(p_str, root_str)
+        return _as_upload(rec) if rec else None
+    rec = _datei_satz(p_str, root_str)
+    meta = upload_meta(root, rel)
+    title, people = str(meta.get("title") or "").strip(), str(meta.get("people") or "").strip()
+    described = str(meta.get("description") or "").strip()
+    day = str(meta.get("date") or "")
+    try:
+        when = datetime.strptime(day, "%Y-%m-%d")
+        rec["ts"], rec["date"] = when.timestamp(), day
+    except ValueError:
+        pass                                     # no day given: the file's own time
+    name = str(meta.get("name") or p.name)
+    # The step stores the names joined with " · " (uploads.people_of), as
+    # every `who` list is: a name written "Surname, Given" is one person.
+    rec.update(title=title or name, who=people, ppl=people.lower(), att=name,
+               text=" \n".join(x for x in (described, name) if x)[:SAFETY_CAP])
+    return _as_upload(rec)
+
+
+def load_uploads(root_dir, nur=None):
+    """One record per uploaded mail and plain file."""
+    root = Path(root_dir)
+    files = _nur(_dateien_uploads(root), root, nur)
+    return [r for r in _pmap(_upload_satz, files, str(root)) if r]
+
+
+def load_upload_cards(root_dir):
+    """The uploaded appointments and contact cards, read as the mailbox's
+    are."""
+    return [_as_upload(r) for r in load_calendar(root_dir) + load_contacts(root_dir)
+            if r["rel"].startswith(UPLOAD_CARDS)]
+
+
 DATEIEN = {"teams": _dateien_teams, "outlook": _dateien_outlook,
            "onedrive": _dateien_onedrive, "sharepoint": _dateien_sharepoint,
            "pages": _dateien_pages, "onenote": _dateien_onenote,
-           "teams_files": _dateien_teams_files}
+           "teams_files": _dateien_teams_files, UPLOADS_ROOT: _dateien_uploads}
 
 
 def _nur(files, root, nur):

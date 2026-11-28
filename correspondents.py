@@ -24,6 +24,8 @@ Stdlib only; the callers hand in the connection.
 import re
 import time
 
+import store_layout
+
 MAIL_LINES = ("to_ppl", "cc_ppl", "bcc_ppl")
 # The local part as RFC 5322 allows it: "o'brien@example.com" is an address.
 # … and as long: 64 characters, which also keeps a long line without "@"
@@ -55,6 +57,10 @@ def index_rows(chunks):
     seen = set()
     for c in chunks:
         if c.get("src") != "outlook" or not c["cid"].endswith("#0"):
+            continue
+        # A mail added by hand is somebody's mail, not this mailbox's: it
+        # counts for nobody's exchange with the owner.
+        if c.get("root") == store_layout.UPLOADS_ROOT:
             continue
         if c.get("key"):
             if c["key"] in seen:
@@ -93,7 +99,7 @@ def rows(con):
     seen = set()
     for ts, sender, name, to, cc, bcc, thread, rel, ident in con.execute(
             f"SELECT ts, who_mail, who, to_ppl, cc_ppl, bcc_ppl, thread, rel, {key} "
-            "FROM chunks WHERE seq = 0 AND src = 'outlook' ORDER BY rowid"):
+            f"FROM chunks WHERE seq = 0 AND src = 'outlook' AND root != '{store_layout.UPLOADS_ROOT}' ORDER BY rowid"):
         if ident:
             if ident in seen:
                 continue
@@ -329,7 +335,7 @@ def signature_mails(con, addresses, limit):
                  f"WHERE sender IN ({marks}) ORDER BY ts DESC")
     else:
         query = (f"SELECT who_mail, rel, ts, thread FROM chunks WHERE seq = 0 "
-                 f"AND src = 'outlook' AND who_mail IN ({marks}) ORDER BY ts DESC")
+                 f"AND src = 'outlook' AND root != '{store_layout.UPLOADS_ROOT}' AND who_mail IN ({marks}) ORDER BY ts DESC")
     mails = {a: [] for a in wanted}
     for sender, rel, ts, thread in con.execute(query, wanted):
         mails[sender].append((rel, ts, thread or rel))

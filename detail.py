@@ -255,6 +255,13 @@ def _datei(row, ziel):
             out["modified"] = datetime.fromtimestamp(st.st_mtime).strftime("%Y-%m-%d %H:%M")
         except OSError:
             pass
+    if row["root"] == corpus.UPLOADS_ROOT:
+        # A file added by hand is known by what was typed about it
+        # (uploads.py): its people, its day, and the description as its text.
+        meta = corpus.upload_meta(ziel.parents[len(Path(row["rel"]).parts) - 1], row["rel"]) if ziel is not None else {}
+        out.update(name=meta.get("name") or name, people=meta.get("people") or row["who"] or "",
+                   day=meta.get("date") or "", added=meta.get("added") or "",
+                   text=meta.get("description") or "")
     return out
 
 

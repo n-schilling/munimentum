@@ -146,6 +146,28 @@ a.chip:hover,a.chip:focus-visible{border-color:var(--accent);color:var(--accent)
 .contact-form input[type=text],.contact-form textarea{width:100%}
 .contact-form textarea{min-height:0;height:58px}
 .tag.frequent{margin-left:8px;color:var(--accent);background:var(--accent-weich);font-weight:500}
+.upload-item{border:1px solid var(--line);border-radius:10px;padding:10px 12px;margin-bottom:10px}
+.upload-head{display:flex;align-items:center;gap:10px;min-width:0}
+.upload-head b{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upload-head .ikonknopf{margin-left:auto;flex:none}
+.upload-item .contact-form{margin-top:8px}
+.upload-note-block{margin:0 0 12px}
+.upload-details{margin-top:6px}
+.upload-people{display:block;position:relative}
+.upload-people .menu{max-width:none}
+.upload-details summary svg,.upload-note-block summary svg{vertical-align:-2px;margin-right:4px}
+.upload-note-choice{display:flex;align-items:center;gap:8px;margin:8px 0}
+.upload-note-block textarea.note-field{min-height:0;height:58px;margin-top:6px}
+.upload-note-hint{margin:6px 0 0}
+.upload-note{margin-top:8px}
+.upload-note textarea.note-field{min-height:0;height:36px;font-size:13px}
+.note-field{width:100%;resize:vertical;font-family:inherit;font-size:14px}
+.note-item{margin:0 0 8px;overflow-wrap:anywhere}
+.note-label{display:flex;align-items:center;gap:6px;margin:10px 0 4px}
+.item-note{margin:2px 0 12px;font-size:13.5px}
+.item-note .note-text{white-space:pre-wrap;overflow-wrap:anywhere;display:block}
+.item-note .note-when{display:block;margin-top:2px}
+.mini.has-note{color:var(--accent)}
 .tag.update{margin-left:8px;color:var(--warn);font-weight:500}
 mark{background:var(--code);color:var(--ink);font-weight:600;border-radius:3px;padding:0 3px}
 /* Small status next to a field: the dot carries the colour, the word the fact. */
@@ -246,6 +268,9 @@ button.ghost.rot{color:var(--err)}
 .zahnrad:hover,.zahnrad:focus-visible{color:var(--accent);background:var(--code);outline:none}
 .chk-note{margin:0;color:var(--warn);font-size:13px}
 .chk-note:empty{display:none}
+.chip-caution{display:inline-flex;align-items:center;gap:5px;margin-left:4px;font-size:11.5px;font-weight:400;color:var(--muted)}
+.chip-caution::before{content:"";width:6px;height:6px;border-radius:50%;background:var(--warn);flex:none}
+.chip input:not(:checked) ~ .chip-caution{display:none}
 
 /* ---- Search archive ---- */
 .suchzeile{display:flex;gap:10px;align-items:stretch}
@@ -1244,7 +1269,6 @@ details.rechte p{margin:6px 0}
       <div class="chips">
         <label class="chip"><input type="checkbox" id="c-org_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.org">Organisation</span></label>
       </div>
-      <p class="chk-note" id="teams-note"></p>
     </div>
     <div class="quelle" id="qk-onedrive">
       <div class="qkopf"><h3><span data-ikon="onedrive"></span><span data-i18n="export.onedrive">OneDrive</span><span class="info" id="q-onedrive-info" tabindex="0" aria-label="i" role="img">i</span></h3>
@@ -1281,6 +1305,15 @@ details.rechte p{margin:6px 0}
         <button class="zahnrad" onclick="zeigeEinstellung('q-onenote')" data-i18n-title="export.configure" aria-label="" data-ikon="zahnrad"></button></div>
       <div class="chips">
         <label class="chip"><input type="checkbox" id="c-onenote_enabled" onchange="saveCats()"><span data-ikon="haken" data-ikon-klasse="haken klein"></span><span data-i18n="export.cat.onenote">Notizbücher</span></label>
+      </div>
+    </div>
+    <!-- Not from Microsoft: what the keeper adds by hand (uploads.py). No
+         tick – it is no part of "Update archive now" – but one action,
+         which ends in a run like every other way into the archive. -->
+    <div class="quelle" id="qk-upload">
+      <div class="qkopf"><h3><span data-ikon="plus"></span><span data-i18n="upload.source">Added by hand</span><span class="info" tabindex="0" aria-label="i" role="img" data-i18n-title="upload.card.i">i</span></h3></div>
+      <div class="chips">
+        <button class="mini" id="upload-open" onclick="uploadDialog()" data-i18n="upload.add">Add files…</button>
       </div>
     </div>
   </div>
@@ -1488,6 +1521,21 @@ details.rechte p{margin:6px 0}
           <span class="bez" data-i18n="view.gone">Nur nicht mehr bei Microsoft</span>
         </label>
         <p class="satz" data-i18n="search.gone.note">Zeigt nur, was nicht mehr im Postfach ist.</p>
+      </div>
+    </div>
+    <!-- Where an item comes from, not what it is: only what the keeper
+         added by hand (uploads.py). It combines with every source – the
+         appointments added by hand, the mails – and is absent while the
+         archive holds nothing of the kind. -->
+    <div class="pill hide" id="p-added" role="button" tabindex="0" onclick="pillAuf('added')" onkeydown="pillTaste(event, 'added')">
+      <span data-ikon="plus" data-ikon-klasse="klein"></span><span class="wert" id="pw-added">Added by hand</span><span class="pfeil" id="pf-added" data-ikon="runter" data-ikon-klasse="klein"></span><span class="x hide" id="px-added" data-i18n-title="search.pill.clear" onclick="event.stopPropagation();pillLeeren('added')">×</span>
+      <div class="popover hide" id="po-added" onclick="event.stopPropagation()" style="min-width:320px">
+        <h4 data-i18n="search.pill.added">Added by hand</h4>
+        <label class="zeile" id="added-feld" for="f-added">
+          <input type="checkbox" class="kipp" id="f-added" onchange="zeigeFilterstand()">
+          <span class="bez" data-i18n="search.added.label">Only what was added by hand</span>
+        </label>
+        <p class="satz" data-i18n="search.added.note"></p>
       </div>
     </div>
     <!-- Only while the source is Mail: nothing else has an attachment the
@@ -2879,8 +2927,12 @@ function zeichneDateien(r){
 
 function dateienSuchen(){
   // The browser's spot becomes the search's filter: source and folder.
-  el('f-source').value = dateiSicht.root || 'datei';
-  var sel = el('f-folder'), pfad = dateiSicht.path || '';
+  // What was added by hand is no source: its files are files, narrowed by
+  // the switch of their origin – and they lie in one folder nobody chose.
+  var byHand = dateiSicht.root === 'uploads';
+  sourceSet(byHand ? ['datei'] : [dateiSicht.root || 'datei']);
+  el('f-added').checked = byHand;
+  var sel = el('f-folder'), pfad = byHand ? '' : dateiSicht.path || '';
   if(pfad && !Array.prototype.some.call(sel.options,
       function(o){ return o.value === pfad; })){
     var o = document.createElement('option');
@@ -2896,6 +2948,7 @@ function filterFelder(){
   return [el('f-person').value.trim(), el('f-source').value === 'all' ? '' : el('f-source').value,
           el('f-from').value, el('f-to').value, el('f-folder').value,
           el('f-typ').value, el('f-gone').checked ? 'gone' : '', anhangGesetzt() ? 'attach' : '',
+          el('f-added').checked ? 'added' : '',
           el('f-fall').value, el('f-party').value !== 'all' ? el('f-party').value : '']
          .filter(Boolean)
          // Each mail line counts for itself, as the two ends of the date
@@ -2908,13 +2961,63 @@ function filterFelder(){
    search into a mail search. Elsewhere the pill is absent and nothing of
    it is sent. */
 function mailMoeglich(){
-  return KANN_MAIL && el('f-source').value === 'outlook';
+  return KANN_MAIL && sourceList().indexOf('outlook') >= 0;
+}
+/* The sources chosen – none means all of them. The select keeps the
+   value everything else reads (the criteria, the history, a hand-over
+   from another view): one key, or several joined by commas, which is
+   what the search takes. Several at once get an option of their own, so
+   the select can hold them. */
+var SOURCE_KEYS = ['teams', 'outlook', 'kalender', 'kontakte', 'onedrive', 'sharepoint', 'datei',
+                   'pages', 'planner', 'todo', 'onenote'];
+function sourceList(){
+  var value = el('f-source').value;
+  return !value || value === 'all' ? [] : String(value).split(',').filter(Boolean);
+}
+/* The one source folders and file types are listed for – with several
+   chosen there is no such list, as with all of them. */
+function sourceOne(){
+  var list = sourceList();
+  return list.length === 1 ? list[0] : 'all';
+}
+function sourceName(key){
+  var name = t('search.source.' + key);
+  return name === 'search.source.' + key ? key : name;
+}
+function sourceText(list){
+  list = list || sourceList();
+  return !list.length ? '' : list.length <= 2 ? list.map(sourceName).join(', ')
+    : t('search.pill.source.n', {n: zahl(list.length)});
+}
+function sourceSet(list){
+  // In the order of the list, and only what is a source: a stored value
+  // of another shape is no filter.
+  list = SOURCE_KEYS.filter(function(k){ return (list || []).indexOf(k) >= 0; });
+  var sel = el('f-source'), value = list.length ? list.join(',') : 'all';
+  if(list.length > 1 && sel.appendChild &&
+     ![].some.call(sel.options || [], function(o){ return o.value === value; })){
+    var option = document.createElement('option');
+    option.value = value;
+    option.textContent = sourceText(list);
+    sel.appendChild(option);
+  }
+  sel.value = value;
+}
+function sourceToggle(key){
+  var list = sourceList(), at = list.indexOf(key);
+  if(at >= 0) list.splice(at, 1); else list.push(key);
+  sourceSet(list);
+  // A folder belongs to one source: with another choice it is none.
+  el('f-folder').value = '';
+  ladeOrdner();
+  zeigeFilterstand();
+  pillListe('source');
 }
 /* The attachment filter: only with Mail, like the mail lines – nothing
    else has an attachment the way a mail has one. A tick left behind
    under another source counts for nothing and is sent nowhere. */
 function anhangMoeglich(){
-  return el('f-source').value === 'outlook';
+  return sourceList().indexOf('outlook') >= 0;
 }
 function anhangGesetzt(){
   return anhangMoeglich() && !!el('f-attach').checked;
@@ -2943,6 +3046,7 @@ function filterLeeren(){
   el('f-person').value = ''; el('f-source').value = 'all';
   el('f-from').value = ''; el('f-to').value = ''; el('f-folder').value = '';
   el('f-typ').value = ''; el('f-gone').checked = false; el('f-attach').checked = false;
+  el('f-added').checked = false;
   el('f-fall').value = ''; el('f-party').value = 'all';
   MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   zeigeFilterstand();
@@ -2979,6 +3083,7 @@ function zeigeFilterstand(){
   el('f-typ').classList.toggle('on', !!el('f-typ').value);
   el('gone-feld').classList.toggle('on', !!el('f-gone').checked);
   el('attach-feld').classList.toggle('on', !!el('f-attach').checked);
+  el('added-feld').classList.toggle('on', !!el('f-added').checked);
   el('f-fall').classList.toggle('on', !!el('f-fall').value);
   el('f-party').classList.toggle('on', el('f-party').value !== 'all');
   MAIL_ROLLEN.forEach(function(r){
@@ -2995,7 +3100,7 @@ function zeigeFilterstand(){
    under a pill. The pill says the filter's name, or its value once set,
    and then carries a × that clears it. A filter the index or the source
    cannot offer hides together with its control. */
-var PILLEN = ['person', 'source', 'mail', 'date', 'typ', 'folder', 'fall', 'party', 'weg', 'anhang'];
+var PILLEN = ['person', 'source', 'mail', 'date', 'typ', 'folder', 'fall', 'party', 'weg', 'added', 'anhang'];
 var PILL_FELD = {person: 'f-person', source: 'f-source', typ: 'f-typ', folder: 'f-folder', fall: 'f-fall', party: 'f-party'};
 function optionText(id){
   var sel = el(id), o = sel.options && sel.options[sel.selectedIndex];
@@ -3020,7 +3125,7 @@ function fallFilterText(){
 }
 function pillWerte(){
   return {person: el('f-person').value.trim(),
-          source: el('f-source').value && el('f-source').value !== 'all' ? optionText('f-source') : '',
+          source: sourceText(),
           mail: mailText(),
           date: datumText(),
           typ: el('f-typ').value ? el('f-typ').value.toUpperCase() : '',
@@ -3028,6 +3133,7 @@ function pillWerte(){
           fall: el('f-fall').value ? fallFilterText() : '',
           party: el('f-party').value && el('f-party').value !== 'all' ? t('search.party.' + el('f-party').value) : '',
           weg: el('f-gone').checked ? t('search.pill.weg') : '',
+          added: el('f-added').checked ? t('search.pill.added') : '',
           anhang: anhangGesetzt() ? t('search.pill.anhang') : ''};
 }
 function zeichnePillen(){
@@ -3075,6 +3181,18 @@ function pillTaste(ev, k){
    is typed above them. */
 function pillListe(k){
   var sel = el(PILL_FELD[k]), kasten = el('pl-' + k);
+  if(k === 'source'){
+    // Several may be ticked: the list stays open, "all" takes every tick away.
+    var chosen = sourceList();
+    kasten.innerHTML = '<button type="button"' + (!chosen.length ? ' class="on"' : '') +
+      ' onclick="pillSetzen(\'source\', \'all\')"><span class="tick"></span>' + esc(t('search.source.all')) + '</button>' +
+      SOURCE_KEYS.map(function(key){
+        var on = chosen.indexOf(key) >= 0;
+        return '<button type="button"' + (on ? ' class="on"' : '') + ' data-source="' + key + '" onclick="sourceToggle(\'' + key +
+          '\')"><span class="tick">' + (on ? ikon('haken', 'klein') : '') + '</span>' + esc(sourceName(key)) + '</button>';
+      }).join('');
+    return;
+  }
   var wort = k === 'folder' ? el('folder-filter').value.trim().toLowerCase() : '';
   kasten.innerHTML = [].map.call(sel.options || [], function(o){
     var m = /^(.*) \(([^()]+)\)$/.exec(o.textContent);
@@ -3097,6 +3215,7 @@ function pillLeeren(k){
   else if(k === 'mail') MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = ''; });
   else if(k === 'weg') el('f-gone').checked = false;
   else if(k === 'anhang') el('f-attach').checked = false;
+  else if(k === 'added') el('f-added').checked = false;
   else {
     el(PILL_FELD[k]).value = k === 'source' || k === 'party' ? 'all' : '';
     if(k === 'source') ladeOrdner();
@@ -3293,8 +3412,6 @@ function renderStatus(s){
     fuelleSprachen();
     fuelleZeitplan(s.config);
   }
-  el('teams-note').textContent = checked('t').indexOf('channels') >= 0
-    ? t('export.channels.note') : '';
   el('sp-export-note').textContent = el('c-sharepoint_enabled').checked
     && !(s.config.sharepoint_urls || '').trim() ? t('export.sharepoint.nourls') : '';
 
@@ -3306,6 +3423,10 @@ function renderStatus(s){
   var kannGone = kann.indexOf('gone') >= 0;
   el('p-weg').classList.toggle('hide', !kannGone);
   if(!kannGone) el('f-gone').checked = false;
+  // "Added by hand": only while something was – else it could narrow nothing.
+  var canAdded = kann.indexOf('added') >= 0;
+  el('p-added').classList.toggle('hide', !canAdded);
+  if(!canAdded) el('f-added').checked = false;
   KANN_VERLAUF = kann.indexOf('thread') >= 0;
   KANN_ADRESSEN = kann.indexOf('who_mail') >= 0;
   // The mail lines came with 13.0 and need one index run; until it has
@@ -3489,14 +3610,21 @@ function fuelleZeitplan(cfg){
   el('s-calendar').checked = !!p.calendar;
 }
 
+/* A chip may carry a caution of its own (FILL_CAUTION): a small mark and
+   two words inside the chip while it is ticked, the whole sentence on the
+   mouseover – said where the choice is made, and nothing to act on. */
+var FILL_CAUTION = {channels: {short: 'export.channels.short', note: 'export.channels.note'}};
 function fill(id, keys, active, pre){
   // One chip per category: the checkbox inside carries the state, the chip
-  // shows it. The channels warning sits in the card's footer (#teams-note).
+  // shows it.
   el(id).innerHTML = keys.map(function(k){
-    return '<label class="chip"><input type="checkbox" id="' + pre + '-' + k + '" value="' +
+    var caution = FILL_CAUTION[k];
+    return '<label class="chip"' + (caution ? ' title="' + esc(t(caution.note)) + '"' : '') +
+      '><input type="checkbox" id="' + pre + '-' + k + '" value="' +
       k + '"' + (active.indexOf(k) >= 0 ? ' checked' : '') +
       ' onchange="saveCats()">' + ikon('haken', 'haken klein') + '<span>' +
-      esc(t('export.cat.' + k)) + '</span></label>';
+      esc(t('export.cat.' + k)) + '</span>' +
+      (caution ? '<span class="chip-caution">' + esc(t(caution.short)) + '</span>' : '') + '</label>';
   }).join('');
 }
 function checked(pre){
@@ -3546,6 +3674,300 @@ function runExport(){
   // deleted events come exclusively from the mailbox.
   run({outlook:o, teams:tm, onedrive:od, sharepoint:sp, sharepoint_pages:sps,
        planner:pl, todo:td, onenote:on, organization:org, index:true, calendar:o}, t('job.export'));
+}
+
+/* ---------- Adding files by hand ----------
+   One window: choose files, see what the app takes each for – a mail, an
+   appointment and a contact card are read as such and need no word; a
+   plain file is found by what is typed about it here – and add them. The
+   bytes go to a staging slot as soon as a file is chosen; "Add to archive"
+   starts the run that takes them in, chains them and builds the index. */
+var UPLOAD = {items: [], seq: 0};
+var UPLOAD_FIELDS = ['title', 'date', 'people', 'description'];   // what a plain file is found by
+function uploadReady(){ return UPLOAD.items.filter(function(x){ return x.state === 'ready'; }); }
+function uploadDialog(){
+  UPLOAD = {items: [], seq: 0};
+  oeffneEigenes('upload', modalKopf(t('upload.title'), 'upload', t('upload.card.i')) +
+    '<input type="file" id="upload-files" multiple class="hide" onchange="uploadChosen(this.files); this.value = \'\'">' +
+    '<div id="upload-notes"></div>' +
+    '<div id="upload-list"></div>' +
+    '<div class="row modal-fuss"><button class="act" id="upload-go" onclick="uploadAdd()">' + esc(t('upload.go')) + '</button>' +
+    '<button class="ghost" onclick="dyn(\'upload-files\').click()">' + esc(t('upload.choose')) + '</button></div>');
+  uploadDraw();
+}
+/* What is typed stays typed: read back before every drawing. */
+function uploadRead(){
+  UPLOAD.items.forEach(function(x){
+    // Only what was drawn with its fields has words to read back.
+    if(x.kind !== 'file' || x.state !== 'ready' || !x.drawn) return;
+    UPLOAD_FIELDS.forEach(function(f){
+      var field = dyn('upload-' + f + '-' + x.n);
+      if(field) x[f] = field.value;
+    });
+  });
+  // The notes: one for all, or each file's own.
+  var all = dyn('upload-note-all');
+  if(all && UPLOAD.allDrawn){
+    UPLOAD.note = all.value;
+    // One file left of "a note per file": the one field is that file's.
+    var ready = uploadReady();
+    if(UPLOAD.noteMode === 'each' && ready.length === 1) ready[0].note = all.value;
+  }
+  UPLOAD.items.forEach(function(x){
+    var own = dyn('upload-note-' + x.n);
+    if(own && x.noteDrawn) x.note = own.value;
+  });
+}
+/* A note with the files (item_notes.py): one for all of them – it becomes
+   each file's own note – or one per file. */
+function uploadNoteMode(mode){
+  uploadRead();
+  UPLOAD.noteMode = mode;
+  UPLOAD.noteOpen = true;
+  uploadDraw();
+}
+/* ---------- People of an uploaded file: suggestions ----------
+   The field takes several names, separated by commas; the one being typed
+   – what follows the last comma – is held against the people the archive
+   knows, as the search's Person pill does. A name it does not know is
+   simply kept: the last row says so. */
+var UPLOAD_PEOPLE;
+function uploadPeopleReset(){ UPLOAD_PEOPLE = {n: 0, rows: [], active: -1, open: false, timer: null}; }
+uploadPeopleReset();
+var UPLOAD_PEOPLE_ASKED = 0;
+/* The names in the field, split at commas and semicolons outside double
+   quotes – as the step reads them (uploads.people_of): a name picked as
+   "Surname, Given" is one person. The last part is the one being typed. */
+function uploadPeopleParts(value){
+  var parts = [''], quoted = false;
+  String(value || '').split('').forEach(function(c){
+    if(c === '"') quoted = !quoted;
+    if(!quoted && (c === ',' || c === ';')) parts.push('');
+    else parts[parts.length - 1] += c;
+  });
+  var term = parts.pop().trim();
+  return {before: parts.map(function(x){ return x.trim(); }).filter(Boolean), term: term.replace(/^"/, '')};
+}
+function uploadPeopleSuggest(n){
+  clearTimeout(UPLOAD_PEOPLE.timer);
+  var field = dyn('upload-people-' + n);
+  var term = field ? uploadPeopleParts(field.value).term : '';
+  if(term.length < 2){ uploadPeopleClose(); return; }
+  var asked = ++UPLOAD_PEOPLE_ASKED;
+  UPLOAD_PEOPLE.timer = setTimeout(function(){
+    api(API + '/people?limit=' + VORSCHLAG_MAX + '&source=all&contains=' + encodeURIComponent(term)).then(function(r){
+      var now = dyn('upload-people-' + n);
+      // Typed on or left the field in the meantime, or no index to ask: nothing to show.
+      if(asked !== UPLOAD_PEOPLE_ASKED || !now || uploadPeopleParts(now.value).term !== term || !r || r.ok === false) return;
+      uploadPeopleDraw(n, term, r.items || []);
+    }).catch(uploadPeopleClose);
+  }, 150);
+}
+function uploadPeopleDraw(n, term, items){
+  var box = dyn('upload-people-list-' + n);
+  if(!box) return;
+  var known = items.some(function(p){ return String(p.name).toLowerCase() === term.toLowerCase(); });
+  var rows = items.map(function(p){ return {name: p.name, count: p.messages}; });
+  if(!known) rows.push({name: term, fresh: true});
+  UPLOAD_PEOPLE = {n: n, rows: rows, active: -1, open: true, timer: null};
+  box.innerHTML = rows.map(function(p, i){
+    return (p.fresh && i ? '<hr>' : '') +
+      '<button type="button" role="option" aria-selected="false" id="upload-person-' + i + '" ' +
+      'onmousedown="event.preventDefault()" onclick="uploadPeoplePick(' + i + ')">' +
+      '<span class="wer">' + esc(p.fresh ? t('upload.people.new', {name: p.name}) : p.name) + '</span>' +
+      (p.fresh ? '' : '<span class="zahl">' + zahl(p.count) + '</span>') + '</button>';
+  }).join('');
+  box.classList.remove('hide');
+}
+function uploadPeopleClose(){
+  UPLOAD_PEOPLE_ASKED++;               // an answer still on its way is no longer wanted
+  clearTimeout(UPLOAD_PEOPLE.timer);
+  var box = UPLOAD_PEOPLE.open ? dyn('upload-people-list-' + UPLOAD_PEOPLE.n) : null;
+  if(box){ box.classList.add('hide'); box.innerHTML = ''; }
+  uploadPeopleReset();
+}
+function uploadPeoplePick(i){
+  var p = UPLOAD_PEOPLE.rows[i], field = dyn('upload-people-' + UPLOAD_PEOPLE.n);
+  if(!p || !field) return;
+  // The name takes the place of what was being typed; the next one can follow.
+  var name = /[,;]/.test(p.name) ? '"' + p.name.replace(/"/g, '') + '"' : p.name;
+  field.value = uploadPeopleParts(field.value).before.concat([name]).join(', ') + ', ';
+  uploadPeopleClose();
+  if(field.focus) field.focus();
+}
+function uploadPeopleKey(ev, n){
+  if(!UPLOAD_PEOPLE.open || UPLOAD_PEOPLE.n !== n || !UPLOAD_PEOPLE.rows.length) return;
+  // Esc closes the list, not the window behind it.
+  if(ev.key === 'Escape' && ev.stopPropagation) ev.stopPropagation();
+  suggestKey(ev, {count: UPLOAD_PEOPLE.rows.length, active: UPLOAD_PEOPLE.active, pick: uploadPeoplePick, close: uploadPeopleClose,
+                  highlight: function(i){ UPLOAD_PEOPLE.active = i; suggestMark('upload-person-', UPLOAD_PEOPLE.rows.length, i); }});
+}
+
+/* What matters in this window is which files come and what each is
+   read as; everything typed about them is optional and stays out of the
+   way: a plain file's words in a closed fold on its card, the note in a
+   closed fold above the list. A fold says so itself ("optional"). */
+function uploadFoldHead(icon, label){
+  return '<summary><span class="pfeil">' + ikon('rechts', 'klein') + '</span>' + (icon ? ikon(icon, 'klein') : '') +
+    esc(t(label)) + ' <span class="muted">– ' + esc(t('upload.optional')) + '</span></summary>';
+}
+function uploadFold(n, open){
+  var x = UPLOAD.items.filter(function(i){ return i.n === n; })[0];
+  if(x) x.open = !!open;
+}
+function uploadNoteFold(open){ UPLOAD.noteOpen = !!open; }
+/* A file's own note, chosen above: one slim field at the foot of its card. */
+function uploadNoteField(id){
+  return '<div class="upload-note"><textarea id="' + id + '" rows="1" class="note-field" aria-label="' + esc(t('note.title')) +
+    '" placeholder="' + esc(t('upload.note.ph')) + '"></textarea></div>';
+}
+function uploadDraw(){
+  var box = dyn('upload-list');
+  if(!box) return;
+  uploadNoteCarry();
+  var ready = uploadReady();
+  var busy = UPLOAD.items.some(function(x){ return x.state === 'sending'; });
+  var each = UPLOAD.noteMode === 'each' && ready.length > 1;
+  box.innerHTML = !UPLOAD.items.length ? '<p class="hint">' + esc(t('upload.empty')) + '</p>'
+    : UPLOAD.items.map(function(x){
+      var head = '<div class="upload-head"><b>' + esc(x.name) + '</b><span class="muted small">' +
+        esc(x.size != null ? bytes(x.size) : '') + '</span>' +
+        (x.state === 'ready' ? '<span class="tag">' + esc(t('upload.kind.' + x.kind)) + '</span>' : '') +
+        '<button class="ikonknopf rechts" title="' + esc(t('upload.remove')) + '" aria-label="' + esc(t('upload.remove')) +
+        '" onclick="uploadRemove(' + x.n + ')">&times;</button></div>';
+      if(x.state === 'sending') return '<div class="upload-item">' + head + '<p class="hint small">' + esc(t('upload.sending')) + '</p></div>';
+      if(x.state === 'failed') return '<div class="upload-item">' + head + '<p class="hint err small">' + esc(x.error || t('upload.failed')) + '</p></div>';
+      if(x.kind !== 'file'){
+        // What the file says itself: shown, not asked for.
+        var said = [x.facts.title, x.facts.date, x.facts.people].filter(Boolean).join(' · ');
+        return '<div class="upload-item">' + head + '<p class="small muted">' + esc(t('upload.read', {facts: said || '–'})) + '</p>' +
+          (each ? uploadNoteField('upload-note-' + x.n) : '') + '</div>';
+      }
+      function field(f, type){
+        var id = 'upload-' + f + '-' + x.n;
+        if(type === 'people')
+          // Names the archive knows are offered as they are written there –
+          // the search finds a person by one spelling; a new name is typed.
+          return '<label class="bez" for="' + id + '">' + esc(t('upload.field.' + f)) + '</label>' +
+            '<span class="vorschlagfeld upload-people"><input type="text" id="' + id + '" role="combobox" aria-autocomplete="list" ' +
+            'aria-controls="upload-people-list-' + x.n + '" autocomplete="off" placeholder="' + esc(t('upload.field.people.ph')) + '" ' +
+            'oninput="uploadPeopleSuggest(' + x.n + ')" onkeydown="uploadPeopleKey(event, ' + x.n + ')" onblur="uploadPeopleClose()">' +
+            '<div class="menu wahlliste hide" id="upload-people-list-' + x.n + '" role="listbox"></div></span>';
+        return '<label class="bez" for="' + id + '">' + esc(t('upload.field.' + f)) + '</label>' +
+          (type === 'area' ? '<textarea id="' + id + '" rows="2" placeholder="' + esc(t('upload.field.description.ph')) + '"></textarea>'
+                           : '<input type="' + type + '" id="' + id + '">');
+      }
+      return '<div class="upload-item">' + head +
+        '<details class="verlauf upload-details"' + (x.open ? ' open' : '') + ' ontoggle="uploadFold(' + x.n + ', this.open)">' +
+        uploadFoldHead('', 'upload.details') +
+        '<div class="contact-form">' + field('title', 'text') + field('date', 'date') +
+        field('people', 'people') + field('description', 'area') + '</div></details>' +
+        (each ? uploadNoteField('upload-note-' + x.n) : '') + '</div>';
+    }).join('');
+  // The note: optional, one closed fold above the list. One file has one
+  // note; from two on the choice – one for all, or each file its own.
+  var notes = dyn('upload-notes');
+  if(notes) notes.innerHTML = !ready.length ? '' :
+    '<details class="verlauf upload-note-block"' + (UPLOAD.noteOpen ? ' open' : '') + ' ontoggle="uploadNoteFold(this.open)">' +
+    uploadFoldHead('notiz', 'note.title') +
+    (ready.length > 1
+      ? '<div class="upload-note-choice"><span class="modi upload-note-mode">' +
+        '<button' + (each ? '' : ' class="on"') + ' id="upload-note-mode-all" onclick="uploadNoteMode(\'all\')">' + esc(t('upload.note.all')) + '</button>' +
+        '<button' + (each ? ' class="on"' : '') + ' id="upload-note-mode-each" onclick="uploadNoteMode(\'each\')">' + esc(t('upload.note.each')) + '</button>' +
+        '</span>' + infoZeichen('upload.note.i') + '</div>' : '') +
+    (each ? '<p class="hint small upload-note-hint">' + esc(t('upload.note.each.hint')) + '</p>'
+          : '<textarea id="upload-note-all" rows="2" class="note-field" aria-label="' + esc(t('note.title')) + '" placeholder="' + esc(t('note.ph')) + '"></textarea>') +
+    '</details>';
+  var all = dyn('upload-note-all');
+  UPLOAD.allDrawn = !!(all && ready.length && !each);
+  if(UPLOAD.allDrawn) all.value = UPLOAD.note || '';
+  UPLOAD.items.forEach(function(x){
+    var own = dyn('upload-note-' + x.n);
+    x.noteDrawn = !!(own && each && x.state === 'ready');
+    if(x.noteDrawn) own.value = x.note || '';
+  });
+  // The values by script, not by attribute: what the page sets it can read back.
+  UPLOAD.items.forEach(function(x){
+    if(x.kind !== 'file' || x.state !== 'ready') return;
+    UPLOAD_FIELDS.forEach(function(f){
+      var field = dyn('upload-' + f + '-' + x.n);
+      if(field) field.value = x[f] || '';
+    });
+    x.drawn = true;
+  });
+  var go = dyn('upload-go');
+  if(go) go.disabled = busy || !ready.length;
+}
+function uploadChosen(files){
+  uploadRead();
+  [].forEach.call(files || [], function(file){
+    var x = {n: ++UPLOAD.seq, name: file.name, size: file.size, state: 'sending'};
+    UPLOAD.items.push(x);
+    fetch(API + '/uploads/staged?name=' + encodeURIComponent(file.name),
+          {method: 'PUT', body: file, headers: {'Content-Type': 'application/octet-stream'}})
+      .then(function(r){ return r.json().then(function(body){ return {ok: r.ok, body: body}; }); })
+      .then(function(r){
+        if(!r.ok){ x.state = 'failed'; x.error = rtext(r.body) || t('upload.failed'); }
+        else if(UPLOAD.items.indexOf(x) < 0){
+          // Taken out while its bytes travelled: the slot they landed in goes too.
+          entferne(API + '/uploads/staged/' + r.body.id);
+        }
+        else {
+          x.state = 'ready'; x.id = r.body.id; x.name = r.body.name; x.size = r.body.size;
+          x.kind = r.body.kind; x.facts = r.body.facts || {};
+          // A plain file starts with its name as its title: one word less to type.
+          x.title = x.name.replace(/\.[A-Za-z0-9]{1,12}$/, '');
+          x.date = ''; x.people = ''; x.description = '';
+        }
+      }).catch(function(){ x.state = 'failed'; x.error = t('upload.failed'); })
+      .then(function(){ uploadRead(); uploadDraw(); });
+  });
+  uploadDraw();
+}
+function uploadRemove(n){
+  uploadRead();
+  var x = UPLOAD.items.filter(function(i){ return i.n === n; })[0];
+  UPLOAD.items = UPLOAD.items.filter(function(i){ return i.n !== n; });
+  if(x && x.id) entferne(API + '/uploads/staged/' + x.id);
+  uploadDraw();
+}
+/* "A note per file" needs two files; with one left – the other removed
+   or refused – that file's own note is the one note there is. */
+function uploadNoteCarry(){
+  var ready = uploadReady();
+  // The file keeps its note: with a second file it is the file's own again.
+  if(UPLOAD.noteMode === 'each' && ready.length === 1 && String(ready[0].note || '').trim())
+    UPLOAD.note = ready[0].note;
+}
+function uploadAdd(){
+  if(UPLOAD.adding) return;            // a second click while the first is under way
+  uploadRead();
+  uploadNoteCarry();
+  var ready = uploadReady(), each = UPLOAD.noteMode === 'each' && ready.length > 1;
+  var items = ready.map(function(x){
+    var item = x.kind !== 'file' ? {id: x.id}
+      : {id: x.id, title: x.title || '', date: x.date || '',
+         // A chosen name leaves a comma for the next one: not part of what is kept.
+         people: String(x.people || '').replace(/[\s,;]+$/, ''), description: x.description || ''};
+    var note = String((each ? x.note : UPLOAD.note) || '').trim();
+    if(note) item.note = note;
+    return item;
+  });
+  if(!items.length) return;
+  LAUF.eigener = true;                 // started here: the window opens with it
+  merke('flow.run', 'upload');
+  UPLOAD.adding = true;
+  post(API + '/uploads', {items: items}).then(function(r){
+    UPLOAD.adding = false;
+    if(r && r.ok === false){ LAUF.eigener = false; apiFehler(r); return; }
+    UPLOAD = {items: [], seq: 0};
+    closeWizard('upload');
+    refresh();
+  }).catch(function(){
+    // The app did not answer: nothing was started, and the button works again.
+    UPLOAD.adding = false; LAUF.eigener = false;
+    meldung(t('upload.failed'), 'err');
+  });
 }
 
 /* ---------- Progress ----------
@@ -4250,7 +4672,7 @@ function fuelleAuswahl(id, liste, alle){
 function zeichneOrdner(liste){
   fuelleAuswahl('f-folder', liste.map(function(f){
     return {wert: f.path, name: ordnerName(f.path), zahl: f.messages};
-  }), t(ORDNER_ALLE[el('f-source').value] || 'search.folder.all'));
+  }), t(ORDNER_ALLE[sourceOne()] || 'search.folder.all'));
 }
 
 /* File types exist only where attachments or files exist – chats, events
@@ -4271,7 +4693,7 @@ function zeichneTypen(liste){
 }
 
 function ladeOrdner(){
-  var quelle = el('f-source').value || 'all';
+  var quelle = sourceOne();
   // After an index run the lists are different: new folders, new counts.
   var stand = (S && S.store) ? S.store.built_at : null;
   if(stand !== ordnerStand){ ordnerJeQuelle = {}; typenJeQuelle = {}; ordnerStand = stand; }
@@ -4280,7 +4702,7 @@ function ladeOrdner(){
   api(API + '/folders?limit=300&source=' + encodeURIComponent(quelle))
     .then(function(r){
       ordnerJeQuelle[quelle] = r.items || [];
-      if((el('f-source').value || 'all') === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
+      if(sourceOne() === quelle) zeichneOrdner(ordnerJeQuelle[quelle]);
     }).catch(function(){});
 }
 
@@ -4290,7 +4712,7 @@ function ladeTypen(quelle){
   api(API + '/filetypes?limit=40&source=' + encodeURIComponent(quelle))
     .then(function(r){
       typenJeQuelle[quelle] = r.items || [];
-      if((el('f-source').value || 'all') === quelle) zeichneTypen(typenJeQuelle[quelle]);
+      if(sourceOne() === quelle) zeichneTypen(typenJeQuelle[quelle]);
     }).catch(function(){});
 }
 
@@ -4381,7 +4803,7 @@ function doSearch(off, gespeichert){
   // Only the kind and the number of filters – never the search text or a name.
   var filter = ['f-person', 'f-source', 'f-from', 'f-to', 'f-folder', 'f-typ', 'f-fall']
     .filter(function(id){ return el(id).value; }).length +
-    (el('f-gone').checked ? 1 : 0) + (anhangGesetzt() ? 1 : 0) +
+    (el('f-gone').checked ? 1 : 0) + (anhangGesetzt() ? 1 : 0) + (el('f-added').checked ? 1 : 0) +
     (el('f-party').value !== 'all' ? 1 : 0) + mailGesetzt().length;
   merke('flow.search', MODUS_ZU_SERVER[SUCHMODUS] + (filter ? ' +' + filter : ''));
   var proSeite = trefferProSeite();
@@ -4416,6 +4838,7 @@ function searchParams(){
   return new URLSearchParams({q: el('q').value, person: el('f-person').value,
     source: el('f-source').value, from: el('f-from').value, to: el('f-to').value,
     gone: el('f-gone').checked ? '1' : '', attachments: anhangGesetzt() ? '1' : '',
+    added: el('f-added').checked ? '1' : '',
     folder: el('f-folder').value,
     filetype: el('f-typ').value,
     // The "Cases" filter: a case, or one folder inside it ("case/folder")
@@ -4538,30 +4961,41 @@ function personWaehlen(i){
   zeigeFilterstand();
 }
 
+/* One keyboard for every suggestion list – the Person pill, the mail
+   lines, the People of a file added by hand: ↓ and ↑ move (↑ from nothing
+   chosen goes to the end – done by arithmetic it would land on the
+   second-to-last row), Enter takes the chosen row, Esc closes. `list`
+   says how many rows there are, which is chosen, and how to choose,
+   take and close. True when the key was the list's. */
+function suggestKey(ev, list){
+  if(ev.key === 'Escape'){ list.close(); ev.preventDefault(); return true; }
+  var n = list.count;
+  if(!n) return false;
+  if(ev.key === 'ArrowDown') list.highlight((list.active + 1) % n);
+  else if(ev.key === 'ArrowUp') list.highlight(list.active <= 0 ? n - 1 : list.active - 1);
+  else if(ev.key === 'Enter' && list.active >= 0) list.pick(list.active);
+  else return false;
+  ev.preventDefault();
+  return true;
+}
+/* The chosen row says so to a screen reader; the others say they are not. */
+function suggestMark(prefix, count, i){
+  for(var j = 0; j < count; j++){
+    var b = dyn(prefix + j);
+    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
+  }
+}
 function personHervor(i){
   personAktiv = i;
-  personVorschlaege.forEach(function(_, j){
-    var b = el('personwahl-' + j);
-    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
-  });
+  suggestMark('personwahl-', personVorschlaege.length, i);
 }
 
 /* Keyboard as in any suggestion list: up, down, Enter, Esc. Without it one
    would have to reach for the mouse to take over a name. */
 function personTaste(ev){
-  var offen = !el('personliste').classList.contains('hide');
-  var n = personVorschlaege.length;
-  if(ev.key === 'Escape' && offen){ personZu(); ev.preventDefault(); return; }
-  if(!offen || !n) return;
-  if(ev.key === 'ArrowDown'){
-    personHervor((personAktiv + 1) % n); ev.preventDefault();
-  } else if(ev.key === 'ArrowUp'){
-    // From "nothing selected" (-1), ↑ belongs at the end of the list. Done
-    // arithmetically it would jump to the second-to-last entry.
-    personHervor(personAktiv <= 0 ? n - 1 : personAktiv - 1); ev.preventDefault();
-  } else if(ev.key === 'Enter' && personAktiv >= 0){
-    personWaehlen(personAktiv); ev.preventDefault();
-  }
+  if(el('personliste').classList.contains('hide')) return;
+  suggestKey(ev, {count: personVorschlaege.length, active: personAktiv,
+                  highlight: personHervor, pick: personWaehlen, close: personZu});
 }
 
 /* ---------- The addresses of the mail lines (13.0) ----------
@@ -4627,30 +5061,20 @@ function mailWaehlen(i){
 
 function mailHervor(i){
   mailAktiv = i;
-  mailVorschlaege.forEach(function(_, j){
-    var b = el('mailwahl-' + j);
-    if(b) b.setAttribute('aria-selected', j === i ? 'true' : 'false');
-  });
+  suggestMark('mailwahl-', mailVorschlaege.length, i);
 }
 
 function mailTaste(ev, rolle){
   var kasten = el('mailliste-' + rolle);
   var offen = kasten && !kasten.classList.contains('hide');
   var n = mailVorschlaege.length;
-  if(ev.key === 'Escape' && offen){ mailZu(); ev.preventDefault(); return; }
   // Enter in a line is "search now", as it is in the search field itself –
   // unless a suggestion is highlighted, which then wins.
   if(ev.key === 'Enter' && !(offen && mailAktiv >= 0)){
     pillZu(); sofortSuchen(); ev.preventDefault(); return;
   }
-  if(!offen || !n) return;
-  if(ev.key === 'ArrowDown'){
-    mailHervor((mailAktiv + 1) % n); ev.preventDefault();
-  } else if(ev.key === 'ArrowUp'){
-    mailHervor(mailAktiv <= 0 ? n - 1 : mailAktiv - 1); ev.preventDefault();
-  } else if(ev.key === 'Enter'){
-    mailWaehlen(mailAktiv); ev.preventDefault();
-  }
+  if(!offen) return;
+  suggestKey(ev, {count: n, active: mailAktiv, highlight: mailHervor, pick: mailWaehlen, close: mailZu});
 }
 
 document.addEventListener('click', function(ev){
@@ -4685,9 +5109,10 @@ function aehnlicheZu(cid){
 /* The tag speaks the interface language – the server label is only the
    fallback for sources this page does not know yet. */
 function quellTag(h){
+  // A file added by hand lies in no mirror: it is a file, and its mark says the rest.
   var key = h.source === 'datei'
     ? (h.root === 'sharepoint' ? 'search.source.sharepoint'
-                               : 'search.source.onedrive')
+       : h.root === 'uploads' ? 'upload.file' : 'search.source.onedrive')
     : 'search.source.' + h.source;
   var wert = t(key);
   return wert === key ? (h.source_label || h.source || '') : wert;
@@ -5023,6 +5448,7 @@ function zeigeDetail(h, nr){
     detailKopf(h, nr) +
     '<div class="dtitel">' + esc(h.title || t('search.nosubject')) + '</div>' +
     '<dl class="fakten" id="detail-fakten">' + detailFakten(h, null) + '</dl>' +
+    '<div id="detail-note"></div>' +
     detailAktionen(h, nr, link) +
     '<div class="dinhalt' + (seite ? ' rahmenlos' : '') + '" id="detail-text">' + (seite
       ? '<iframe class="dframe" sandbox="" src="' + esc(link) + '" title="' + esc(h.title || '') + '"></iframe>'
@@ -5031,6 +5457,7 @@ function zeigeDetail(h, nr){
     if(kennung !== DETAIL_STAND || !r || r.ok === false || r.error) return;
     var fakten = dyn('detail-fakten'), text = dyn('detail-text');
     if(fakten) fakten.innerHTML = detailFakten(h, r);
+    noteShow(r.item_note);
     el('detail-checksums').innerHTML = checksumFold(r.checksums);
     if(!seite) DETAIL_BODY = detailInhalt(h, r);
     // A version chosen meanwhile keeps the content area.
@@ -5092,6 +5519,11 @@ function detailAktionen(h, nr, link){
     (h.uid && ['outlook', 'kalender', 'kontakte'].indexOf(h.source) >= 0
       ? '<button class="ghost" id="detail-pdf"' + (PDF_BUSY ? ' disabled' : '') + ' onclick="itemPdf(' + jsArg(h.uid) + ')" title="' + esc(t('search.menu.pdf.i')) + '">' +
         ikon('datei', 'klein') + esc(t('search.menu.pdf')) + '</button>' : '') +
+    // The keeper's own note on the item (item_notes.py).
+    '<button class="ghost" id="detail-note-button"' + (h.key
+      ? ' onclick="noteDialog(' + jsArg(h.key) + ', ' + jsArg(h.title || '') + ')" title="' + esc(t('note.i')) + '"'
+      : ' disabled title="' + esc(t('note.nokey')) + '"') +
+      '>' + ikon('notiz', 'klein') + esc(t('note.button')) + '</button>' +
     '<button class="ghost item-link" id="detail-link"' + (h.key
       ? ' onclick="copyItemLink(' + chosenIndex(nr) + ')" title="' + esc(t('search.detail.link')) + '"'
       : ' disabled title="' + esc(t('search.detail.link.nokey')) + '"') +
@@ -5199,9 +5631,12 @@ function detailPerson(p){
 function ordnerLink(h){
   var pfad = h.context || '';
   if(!pfad) return '';
-  var quelle = h.source === 'datei' ? (h.root || 'onedrive') : h.source;
+  // What was added by hand has the mailbox's folders: the switch of its
+  // origin keeps a mailbox folder of the same name out.
+  var byHand = h.root === 'uploads';
+  var quelle = h.source === 'datei' ? (byHand ? 'datei' : h.root || 'onedrive') : h.source;
   return '<a href="javascript:void(0)" class="pfad" title="' + esc(t('search.filter.folder')) + '" onclick="filterOrdner(\'' +
-    esc(quelle) + '\', \'' + esc(pfad).replace(/'/g, "\\'") + '\')">' +
+    esc(quelle) + '\', \'' + esc(pfad).replace(/'/g, "\\'") + '\'' + (byHand ? ', true' : '') + ')">' +
     ordnerName(pfad).split('/').map(esc).join(ikon('rechts', 'klein')) + '</a>';
 }
 function typLink(ext){
@@ -5209,8 +5644,9 @@ function typLink(ext){
   return KANN_TYP ? '<a href="javascript:void(0)" title="' + esc(t('search.filter.type')) + '" onclick="filterTyp(\'' +
     esc(ext) + '\')">' + esc(ext) + '</a>' : esc(ext);
 }
-function filterOrdner(quelle, pfad){
+function filterOrdner(quelle, pfad, byHand){
   el('f-source').value = quelle;
+  el('f-added').checked = !!byHand;
   ladeOrdner();
   optionSicher(el('f-folder'), pfad);
   el('f-folder').value = pfad;
@@ -5286,8 +5722,16 @@ function detailFakten(h, r){
     var ext = f.ext || (/\.([A-Za-z0-9]{1,8})$/.exec(h.title || '') || [])[1] || '';
     z.push(['search.fact.type', typLink(ext.toLowerCase())]);
     z.push(['search.fact.size', f.size != null ? esc(bytes(f.size)) : '']);
-    z.push(['search.fact.modified', esc(detailWann(f.modified || h.date))]);
-    z.push(['search.fact.where', ordnerLink(h)]);
+    if(h.root === 'uploads'){
+      // What was typed about it when it was added – and when that was.
+      z.push(['upload.fact.name', esc(f.name || '')]);
+      z.push(['upload.fact.day', esc(f.day || '')]);
+      z.push(['upload.fact.people', (f.people ? String(f.people).split(' \u00b7 ') : []).map(personLink).join(', ')]);
+      z.push(['upload.fact.added', f.added ? esc(fmt(f.added)) : '']);
+    } else {
+      z.push(['search.fact.modified', esc(detailWann(f.modified || h.date))]);
+      z.push(['search.fact.where', ordnerLink(h)]);
+    }
   } else if(src === 'pages' || src === 'onenote'){
     z.push([src === 'pages' ? 'search.fact.site' : 'search.fact.notebook', ordnerLink(h)]);
     z.push(['search.fact.modified', esc(detailWann(h.date))]);
@@ -5637,9 +6081,13 @@ function statusTag(f){
    user's own – the rule the case's People view applies to a person. */
 function externMarke(h){
   var intern = internDomains(), domains = (h && h.domains) || [];
-  if(!intern.length || !domains.length) return '';
-  return domains.some(function(d){ return intern.indexOf(d) < 0; })
-    ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '';
+  // What was added by hand says so on every hit – it did not come from
+  // Microsoft, whatever kind of item it is.
+  var added = h && h.root === 'uploads'
+    ? '<span class="tag added" title="' + esc(t('upload.tag.i')) + '">' + esc(t('upload.tag')) + '</span>' : '';
+  if(!intern.length || !domains.length) return added;
+  return added + (domains.some(function(d){ return intern.indexOf(d) < 0; })
+    ? '<span class="tag extern">' + esc(t('people.external')) + '</span>' : '');
 }
 /* The mark of what an MCP client wrote – on the note or the item
    itself, nowhere else. */
@@ -5691,7 +6139,7 @@ function kriterienAusForm(){
   return {q: el('q').value.trim(), mode: SUCHMODUS, person: el('f-person').value.trim(),
           source: el('f-source').value || 'all', from: el('f-from').value, to: el('f-to').value,
           folder: el('f-folder').value, filetype: el('f-typ').value,
-          gone: !!el('f-gone').checked, attachments: anhangGesetzt(),
+          gone: !!el('f-gone').checked, attachments: anhangGesetzt(), added: !!el('f-added').checked,
           case: fw.fall, case_folder: fw.fall ? fw.ordner : null,
           party: el('f-party').value || 'all',
           // Only what the search really used: a line typed while another
@@ -5714,7 +6162,7 @@ function kriterienAnwenden(k){
   el('q').value = k.q || '';
   suchmodusSetzen(MODI.indexOf(k.mode) >= 0 && !el('m-' + k.mode).disabled ? k.mode : 'text');
   el('f-person').value = k.person || '';
-  el('f-source').value = k.source || 'all';
+  sourceSet(String(k.source || 'all').split(','));
   el('f-from').value = k.from || '';
   el('f-to').value = k.to || '';
   optionSicher(el('f-folder'), k.folder);
@@ -5723,6 +6171,7 @@ function kriterienAnwenden(k){
   el('f-typ').value = k.filetype || '';
   el('f-gone').checked = !!k.gone;
   el('f-attach').checked = !!k.attachments;
+  el('f-added').checked = !!k.added;
   el('f-fall').value = k.case ? (k.case_folder ? k.case + '/' + k.case_folder : String(k.case)) : '';
   el('f-party').value = k.party === 'internal' || k.party === 'external' ? k.party : 'all';
   MAIL_ROLLEN.forEach(function(r){ el('f-mail-' + r).value = k['mail_' + r] || ''; });
@@ -5755,14 +6204,14 @@ function kriterienTags(k){
   if(k.q) tags.push(t('search.mode.' + (MODI.indexOf(k.mode) >= 0 ? k.mode : 'text')));
   if(k.person) tags.push(t('search.criteria.person', {name: k.person}));
   if(k.source && k.source !== 'all'){
-    var s = t('search.source.' + k.source);
-    tags.push(t('search.criteria.source', {name: s === 'search.source.' + k.source ? k.source : s}));
+    tags.push(t('search.criteria.source', {name: String(k.source).split(',').map(sourceName).join(', ')}));
   }
   if(k.from || k.to) tags.push((k.from || '…') + ' – ' + (k.to || '…'));
   if(k.folder) tags.push(t('search.criteria.folder', {name: ordnerName(k.folder) || k.folder}));
   if(k.filetype) tags.push('.' + k.filetype);
   if(k.gone) tags.push(t('view.gone'));
   if(k.attachments) tags.push(t('search.pill.anhang'));
+  if(k.added) tags.push(t('search.pill.added'));
   if(k.party === 'internal' || k.party === 'external') tags.push(t('search.criteria.party', {name: t('search.party.' + k.party)}));
   MAIL_ROLLEN.forEach(function(r){
     if(k['mail_' + r]) tags.push(t('search.criteria.mail',
@@ -6419,6 +6868,7 @@ function fallOeffnen(id){
     el('fall-detail').classList.remove('hide');
     zeichneFall();
     zeichneFaelle();
+    notedLoad().then(function(changed){ if(changed && FALL_OFFEN && FALL_OFFEN.id === id) zeichneFall(); });
   });
 }
 
@@ -6558,8 +7008,8 @@ function eintragTick(e, offen){
                  ' aria-label="' + esc(t('cases.pick')) + '" onchange="fallWahlZeile(\'' + key + '\', this.checked)">' : '<span></span>';
 }
 /* The row's actions: Open, the rest of the conversation when the case
-   lacks some of it, the remark's pen, and × – the last three only while
-   the case is open. */
+   lacks some of it, the note and remark, and × – the conversation and ×
+   only while the case is open. */
 function eintragAktionen(e, offen){
   var link = eintragLink(e);
   var key = esc(e.key).replace(/'/g, "\\'");
@@ -6570,9 +7020,13 @@ function eintragAktionen(e, offen){
     (offen && e.thread_open > 0
       ? '<button class="mini" title="' + esc(t('cases.thread.more.tip', {n: zahl(e.thread_open), folder: wo})) +
         '" onclick="threadHolen(\'' + key + '\')">' + esc(t('cases.thread.more', {n: zahl(e.thread_open)})) + '</button>' : '') +
-    (offen ? '<button class="mini nur-ikon" title="' + esc(t(e.remark ? 'cases.remark.edit' : 'cases.remark.add')) +
-             '" onclick="bemerkungFenster(\'' + key + '\')">' + ikon('stift', 'klein') + '</button>' +
-             '<button class="mini" title="' + esc(t('cases.item.remove')) + '" onclick="fallEntfernen(\'' + key + '\')">&times;</button>' : '') +
+    // One button, one window: the note on the item itself (it applies
+    // everywhere, so it is there in a closed case too) and the remark on
+    // why the item is in this case. Marked while the item carries a note –
+    // the remark stands in the row anyway.
+    '<button class="mini nur-ikon' + (NOTED[e.key] ? ' has-note' : '') + '" title="' + esc(t(NOTED[e.key] ? 'note.row.has' : 'note.row')) +
+      '" onclick="noteDialog(' + jsArg(e.key) + ', ' + jsArg(e.title || e.rel || '') + ', true)">' + ikon('notiz', 'klein') + '</button>' +
+    (offen ? '<button class="mini" title="' + esc(t('cases.item.remove')) + '" onclick="fallEntfernen(\'' + key + '\')">&times;</button>' : '') +
     '</span>';
 }
 function eintragZeile(e, ikonName, offen){
@@ -7047,24 +7501,133 @@ function personZeit(name){
   fallFiltern(name);
 }
 
-/* ---------- The remark on an item: one window, one field ---------- */
-function bemerkungFenster(key){
-  var e = ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0];
-  if(!e) return;
-  // The item's own id: that is what the API names it by.
-  FALL_WAHL = {art: 'bemerkung', key: key, id: e.id};
-  oeffneEigenes('bemerkung', modalKopf(t(e.remark ? 'cases.remark.edit' : 'cases.remark.add'), 'bemerkung', t('cases.remark.i')) +
-    '<textarea id="bemerkung-text" rows="3" style="width:100%;resize:vertical;font-family:inherit;font-size:14px" placeholder="' +
-    esc(t('cases.remark.ph')) + '">' + esc(e.remark || '') + '</textarea>' +
-    modalFuss({text: t('cases.remark.save'), tun: 'bemerkungSenden(false)'}, null,
-              e.remark ? '<a href="javascript:void(0)" class="small" onclick="bemerkungSenden(true)">' + esc(t('cases.remark.remove')) + '</a>' : ''), true);
+/* ---------- The note on an item (item_notes.py) ----------
+   The keeper's own word about an item of the archive – where it came
+   from, what it is for – whatever its source, and apart from a case's
+   remark: that one says why the item is in the case and lives there. One
+   window for it, opened from the detail and from a case's row alike,
+   built like the remark's: a field, Save, Remove – and what the note
+   said before, in a closed fold. */
+var NOTED = {};          // key -> true: the items that carry a note
+var NOTE = null;         // the note window's item: {key, title, text, updated, versions}
+function notedLoad(){
+  return api(API + '/notes/keys').then(function(r){
+    if(!r || r.ok === false || !r.items) return false;
+    var before = Object.keys(NOTED).sort().join('\n');
+    NOTED = {};
+    r.items.forEach(function(key){ NOTED[key] = true; });
+    return Object.keys(NOTED).sort().join('\n') !== before;
+  }).catch(function(){ return false; });
 }
-function bemerkungSenden(weg){
-  var feld = dyn('bemerkung-text');
-  var text = weg || !feld ? '' : feld.value.trim();
-  fallSchreiben('PATCH', 'items/' + FALL_WAHL.id, {remark: text}).then(function(r){
-    if(!r || r.ok !== false) closeWizard('bemerkung');
+function noteField(id, label, info, ph, rows){
+  return '<label class="bez note-label" for="' + id + '">' + esc(t(label)) + infoZeichen(info) + '</label>' +
+    '<textarea id="' + id + '" rows="' + rows + '" class="note-field" placeholder="' + esc(t(ph)) + '"></textarea>';
+}
+/* `inCase`: opened from a row of the open case – the same window with a
+   second field, the remark on why the item is in this case. The remark
+   is the case's: a closed case shows it and takes no other. */
+function noteDialog(key, title, inCase){
+  if(!key) return;
+  var entry = inCase ? ((FALL_OFFEN && FALL_OFFEN.item_list) || []).filter(function(x){ return x.key === key; })[0] : null;
+  var open = !!(entry && FALL_OFFEN.status === 'open');
+  var asked = NOTE = {key: key, title: title || '', text: '', versions: 0, loaded: false,
+                      entry: entry && (open || entry.remark) ? {id: entry.id, remark: entry.remark || '', open: open} : null};
+  oeffneEigenes('itemnote', modalKopf(t(asked.entry ? 'note.title.case' : 'note.title'), 'itemnote', asked.entry ? '' : t('note.i')) +
+    (title ? '<p class="small muted note-item">' + esc(title) + '</p>' : '') +
+    (asked.entry
+      ? noteField('item-note-text', 'note.field.item', 'note.i', 'note.ph', 3) + '<div id="item-note-when"></div>' +
+        noteField('bemerkung-text', 'note.field.case', 'cases.remark.i', 'cases.remark.ph', 3)
+      : '<textarea id="item-note-text" rows="4" class="note-field" placeholder="' + esc(t('note.ph')) + '"></textarea>' +
+        '<div id="item-note-when"></div>') +
+    '<div id="item-note-foot">' + noteFoot() + '</div>' +
+    '<div id="item-note-versions"></div>', true);
+  var remark = dyn('bemerkung-text');
+  if(asked.entry && remark){ remark.value = asked.entry.remark; remark.disabled = !asked.entry.open; }
+  api(API + '/notes?key=' + encodeURIComponent(key)).then(function(r){
+    // Only while the window is still this item's.
+    if(wizardOffen !== 'itemnote' || NOTE !== asked) return;
+    if(!r || r.ok === false){ apiFehler(r || {}); return; }
+    noteTake(r);
+    var field = dyn('item-note-text');
+    // What was typed while the answer was on its way stays.
+    if(field && !field.value) field.value = r.text || '';
+  }).catch(function(){});
+}
+function noteTake(r){
+  NOTE.text = r.text || ''; NOTE.updated = r.updated || null; NOTE.versions = r.versions || 0; NOTE.loaded = true;
+  var foot = dyn('item-note-foot'), fold = dyn('item-note-versions'), when = dyn('item-note-when');
+  if(foot) foot.innerHTML = noteFoot();
+  if(when) when.innerHTML = NOTE.updated ? '<p class="signote small">' + esc(t('note.written', {when: fmt(NOTE.updated)})) + '</p>' : '';
+  if(fold) fold.innerHTML = !NOTE.versions ? '' :
+    '<details class="verlauf" id="item-note-fold" ontoggle="noteVersions(this.open)"><summary><span class="pfeil">' +
+    ikon('rechts', 'klein') + '</span>' + esc(t('note.versions', {n: zahl(NOTE.versions)})) + '</summary>' +
+    '<div id="item-note-earlier"></div></details>';
+}
+/* Save – and, where the note is the window's only field, the link that
+   takes it away; with two fields an emptied one is removed by Save. */
+function noteFoot(){
+  return modalFuss({text: t('note.save'), tun: 'noteSave(false)'}, null,
+                   NOTE && NOTE.text && !NOTE.entry ? '<a href="javascript:void(0)" class="small" onclick="noteSave(true)">' + esc(t('note.remove')) + '</a>' : '');
+}
+function noteVersions(open){
+  var box = dyn('item-note-earlier'), asked = NOTE;
+  if(!open || !box || !asked || asked.earlier) return;
+  asked.earlier = true;
+  box.innerHTML = '<p class="hint">' + esc(t('search.versions.loading')) + '</p>';
+  api(API + '/notes/versions?key=' + encodeURIComponent(asked.key)).then(function(r){
+    var into = dyn('item-note-earlier');
+    if(wizardOffen !== 'itemnote' || NOTE !== asked || !into) return;
+    if(!r || r.ok === false){ into.innerHTML = '<p class="hint err">' + esc(rtext(r || {})) + '</p>'; return; }
+    into.innerHTML = (r.items || []).map(function(v){
+      return '<h4 class="info-head">' + esc(t('note.version.span', {from: fmt(v.written), to: fmt(v.replaced)})) + '</h4>' +
+        '<blockquote class="sigquote">' + esc(v.text || '').replace(/\n/g, '<br>') + '</blockquote>';
+    }).join('');
+  }).catch(function(){ asked.earlier = false; });
+}
+/* Only what changed is written: the note to the item, the remark to
+   the case – the note first, and the window stays on a refusal. */
+function noteSave(remove){
+  var field = dyn('item-note-text'), asked = NOTE;
+  if(!asked) return;
+  var text = remove || !field ? '' : field.value.trim();
+  var remarkField = asked.entry && asked.entry.open ? dyn('bemerkung-text') : null;
+  var remark = remarkField ? remarkField.value.trim() : null;
+  // Not before the note is read: an empty field would otherwise remove a
+  // note the window has not shown yet. That is said, and the window stays
+  // with what was typed; the remark beside it is saved anyway.
+  // As it stands now: a note that arrives while the remark is saved was
+  // not written either, and its window must not close over what was typed.
+  var read = asked.loaded;
+  if(!read) meldung(t('note.unread'), 'err');
+  if(!read && !asked.entry) return;
+  var noted = read && text !== asked.text
+    ? schicke('PUT', API + '/notes?key=' + encodeURIComponent(asked.key), {text: text}) : Promise.resolve(null);
+  noted.then(function(r){
+    if(r && r.ok === false){ apiFehler(r); return; }
+    if(r){
+      asked.text = r.text || ''; asked.loaded = true;
+      if(r.text) NOTED[asked.key] = true; else delete NOTED[asked.key];
+      // Shown where the item is: the detail's block, the case row's mark.
+      if(DETAIL_HIT && DETAIL_HIT.key === asked.key) noteShow(r);
+    }
+    var remarked = remark !== null && remark !== asked.entry.remark
+      ? fallSchreiben('PATCH', 'items/' + asked.entry.id, {remark: remark}) : Promise.resolve(null);
+    return remarked.then(function(c){
+      if(c && c.ok === false) return;
+      if(!read) return;                    // the note is still to be saved: the window stays
+      closeWizard('itemnote');
+      if(r || c) meldung(t(asked.entry ? 'note.saved.case' : r.text ? 'note.saved' : 'note.removed'));
+      if(r && !c && FALL_OFFEN) zeichneFall();
+    });
   });
+}
+/* The note in the detail: below the facts, in the keeper's words. */
+function noteShow(note){
+  var box = dyn('detail-note');
+  if(!box) return;
+  box.innerHTML = note && note.text
+    ? '<div class="bem item-note">' + ikon('notiz', 'klein') + '<span><span class="note-text">' + esc(note.text) + '</span>' +
+      '<span class="muted small note-when">' + esc(t('note.written', {when: fmt(note.updated)})) + '</span></span></div>' : '';
 }
 
 /* ---------- The rest of a conversation into the case ---------- */
@@ -9069,6 +9632,7 @@ function zeigeAnalytics(a){
   if(d.sharepoint)
     teile.push(t('search.source.sharepoint') + ' ' + zahl(d.sharepoint));
   if(d.teams) teile.push(t('search.source.teams') + ' ' + zahl(d.teams));
+  if(d.uploads) teile.push(t('search.source.uploads') + ' ' + zahl(d.uploads));
   var pl = a.planner || {}, td = a.todo || {}, on = a.onenote || {};
   el('ana-kpi-dateien').innerHTML =
     // No mirror, no file tiles – "0 files" tells nobody anything.
@@ -9375,7 +9939,8 @@ function evidenceAccept(){
    that is gone from the disk has no detail; it stays plain text. */
 var EVIDENCE_ROOTS = {outlook_export: 'outlook', teams_export: 'teams', onedrive_export: 'onedrive',
                       sharepoint_export: 'sharepoint', sharepoint_pages: 'pages',
-                      planner_export: 'planner', todo_export: 'todo', onenote_export: 'onenote'};
+                      planner_export: 'planner', todo_export: 'todo', onenote_export: 'onenote',
+                      uploads_export: 'uploads'};
 function evidenceFileLink(rel){
   var go = 'evidenceOpen(' + jsArg(String(rel)) + ')';
   return '<a href="javascript:void(0)" title="' + esc(t('ana.evidence.findings.open')) + '" onclick="' + go + '">' +
@@ -10566,7 +11131,7 @@ function frageKI(){
     method: 'QUERY', signal: kiLauf.signal,
     headers: {'Content-Type': 'application/json'},
     body: JSON.stringify({q: el('q').value, person: el('f-person').value,
-                          source: el('f-source').value,
+                          source: el('f-source').value, added: !!el('f-added').checked,
                           from: el('f-from').value, to: el('f-to').value})
   }).then(function(r){
     if(!r.ok || !r.body){
@@ -12110,7 +12675,7 @@ function speichereEinstellungen(){
     // The hidden types affect the select list – it sits cached and would
     // otherwise stay stale until the next index run.
     typenJeQuelle = {};
-    ladeTypen(el('f-source').value || 'all');
+    ladeTypen(sourceOne());
     speichernLaeuft = false;
     einstGeaendert = false;
     var m = el('cfg-msg');

@@ -196,7 +196,9 @@ PREFIXE = ("app.", "pill.", "nav.", "export.", "log.", "search.", "cal.", "copy.
            # The addresses as a tree and as lists (14.2)
            "sp.", "addr.",
            # What stands in an item's PDF (pdf_export.py)
-           "pdf.")
+           "pdf.",
+           # What the keeper adds by hand (uploads.py)
+           "upload.", "note.")
 
 # The scripts narrate via progress.event() in text keys, so keys also live
 # outside app.py.
@@ -208,7 +210,7 @@ SKRIPTE = ("page.html", "profil.html", "steps.py", "runner.py", # the app.py spl
            "sharepoint_export.py", "planner_export.py",
            "todo_export.py", "onenote_export.py", "archive_check.py",
            "case_export.py", "case_collect.py", "export_util.py", "evidence.py",
-           "org_export.py", "pdf_export.py")
+           "org_export.py", "pdf_export.py", "uploads.py")
 
 # Keys that only come into being at runtime ('cal.st.' + status) and
 # therefore appear nowhere in full in the source.
@@ -220,6 +222,11 @@ GESPEICHERTE_ETIKETTEN = ("job.step.check",      # every check step until 13.4.0
                           "run.conv.changed", "run.collect.start")
 
 DYNAMISCH = (
+    # What a file added by hand is taken for, and the fields typed about it.
+    ("upload.kind.", ("mail", "event", "contact", "file")),
+    ("upload.field.", ("title", "date", "people", "description")),
+    # … and the name the index's log gives that root ('search.source.' + source).
+    ("search.source.", ("uploads",)),
     # The address book's pills draw their rows and their values from lists.
     # … each row its name and, under `.i`, what it does.
     ("book.f.", tuple(k + e for k in ("all", "contacts", "comm", "own", "exchange", "frequent", "missing", "update")

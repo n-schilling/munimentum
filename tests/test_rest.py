@@ -990,7 +990,7 @@ def test_der_status_traegt_nur_was_sich_von_selbst_aendert(server):
                 "store"):
         assert weg not in status, weg
     assert "config" not in status["mcp"], "der Client-Schnipsel nennt Pfade"
-    for da in ("token", "ollama", "jobs", "mcp", "update", "auth",
+    for da in ("token", "ollama", "jobs", "mcp", "update",
                "wizard", "schedule_next", "profile", "calendar"):
         assert da in status, da
     # The contract's version is on every answer as a header; repeating it in
@@ -1008,25 +1008,15 @@ def test_der_status_traegt_nur_was_sich_von_selbst_aendert(server):
     assert len(_json.dumps(status)) < 1200, "der Status ist wieder schwer geworden"
 
 
-def test_the_status_announces_its_auth_node_and_drops_it_in_16(server):
-    """`auth` left the page's poll for GET /api/v1/access/session; under v1
-    it may only go announced. RFC 9745 says so on every status – and once
-    the version reaches 16 this test insists the node and the headers are
-    gone, so the announcement cannot outlive its release."""
-    import api_app
-    import version
+def test_the_status_carries_no_sign_in_state_since_16(server):
+    """`auth` left the page's poll for GET /api/v1/access/session in 14.1.0,
+    was announced as deprecated on every status (RFC 9745) and went with
+    16.0.0 – the node and the announcement together."""
     _, port = server
     code, headers, status = roh(port, "GET", "/api/v1/status")
-    assert code == 200
-    if int(version.VERSION.split(".")[0]) < api_app.AUTH_GONE_IN:
-        assert "auth" in status
-        assert re.fullmatch(r"@\d+", headers["Deprecation"])
-        assert 'rel="deprecation"' in headers["Link"] and "</api/v1/openapi>" in headers["Link"]
-        assert roh(port, "GET", "/api/v1/access/session")[2] == status["auth"]
-    else:
-        assert "auth" not in status, "16.0.0: the deprecated auth node goes"
-        assert "Deprecation" not in headers
-    assert "Deprecation" not in roh(port, "GET", "/api/v1/app")[1]
+    assert code == 200 and "auth" not in status
+    assert "Deprecation" not in headers and "Link" not in headers
+    assert set(roh(port, "GET", "/api/v1/access/session")[2]) == {"signed_in", "account", "own_registration", "device"}
 
 
 def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
@@ -1040,7 +1030,6 @@ def test_jeder_knoten_des_status_traegt_nur_was_die_seite_braucht(server):
                                "expires_in_minutes", "missing"}
     assert "store" not in s        # with the inventory since 13.0, see above
     assert set(s["mcp"]) <= {"running", "url", "error"}
-    assert set(s["auth"]) == {"signed_in", "account", "own_registration", "device"}
     assert set(s["update"]) == {"status", "latest", "url", "newer", "ahead", "error", "retry_at"}
     assert set(s["calendar"]) == {"built_at"}
     assert "schedule_enabled" not in s          # a setting, and the page has it

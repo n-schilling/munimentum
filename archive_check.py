@@ -653,7 +653,10 @@ def pruefe_alles(pfade, store, vorher=None, nachgeholt=None, data=None):
         "teams": pfade.get("teams"), "teams_files": pfade.get("teams"),
         "outlook": pfade.get("outlook"), "onedrive": pfade.get("onedrive"),
         "sharepoint": pfade.get("sharepoint"), "pages": pfade.get("sharepoint_pages"),
-        "onenote": pfade.get("onenote")})
+        "onenote": pfade.get("onenote"),
+        # What was added by hand is no export to check, but the index
+        # holds its files: without the folder each would count as gone.
+        store_layout.UPLOADS_ROOT: pfade.get(store_layout.UPLOADS_ROOT)})
     return {"geprueft": datetime.now(UTC).isoformat(timespec="seconds"),
             "quellen": quellen, "index": index, "nachweis": check_evidence(data)}
 
@@ -958,6 +961,7 @@ def main():
     ap.add_argument("--planner", required=True)
     ap.add_argument("--todo", required=True)
     ap.add_argument("--onenote", required=True)
+    ap.add_argument("--uploads", default="", help="what was added by hand (uploads.py) – for the index's balance")
     ap.add_argument("--store", required=True)
     ap.add_argument("--report", required=True)
     ap.add_argument("--data", default="", help="the data folder (evidence chain, versions)")
@@ -970,7 +974,8 @@ def main():
     a = ap.parse_args()
     pfade = {"outlook": a.outlook, "teams": a.teams, "onedrive": a.onedrive,
              "sharepoint": a.sharepoint, "sharepoint_pages": a.pages,
-             "planner": a.planner, "todo": a.todo, "onenote": a.onenote}
+             "planner": a.planner, "todo": a.todo, "onenote": a.onenote,
+             store_layout.UPLOADS_ROOT: a.uploads}
     if a.aktion:
         aktion(a.aktion, a.quelle, pfade, Path(a.report), a.arten)
         return

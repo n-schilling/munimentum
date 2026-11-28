@@ -31,8 +31,9 @@ Microsoft delivered.
 import json
 import re
 import sqlite3
-from datetime import datetime, UTC
 from pathlib import Path
+
+import profile_db
 
 KINDS = ("phone", "mobile", "fax")
 TEXT_MOST = 200         # a name, a title, a company, a department, a number, a link
@@ -88,16 +89,8 @@ class Exists(Exception):
     """The address has a card of the app's own already."""
 
 
-class BadValue(ValueError):
-    """A field's value is not what the field takes; `field` names it."""
-
-    def __init__(self, field):
-        super().__init__(field)
-        self.field = field
-
-
-def now():
-    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+BadValue = profile_db.BadValue    # a field's value is not what the field takes
+now = profile_db.now
 
 
 def clean_address(value):
@@ -215,20 +208,13 @@ class OwnContacts:
         self.path = Path(path)
 
     def _connect(self):
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        con = sqlite3.connect(self.path, timeout=5)
-        con.row_factory = sqlite3.Row
-        con.executescript(_SCHEMA)
-        return con
+        return profile_db.connect(self.path, _SCHEMA)
 
-    @staticmethod
-    def _kept(con):
+    def _kept(self):
         """How many earlier versions each address has – none while the
         table is not there (a read creates nothing)."""
-        if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                       "AND name = 'own_contact_versions'").fetchone() is None:
-            return {}
-        return dict(con.execute("SELECT address, COUNT(*) FROM own_contact_versions GROUP BY address"))
+        return {row[0]: row[1] for row in profile_db.rows(
+            self.path, "SELECT address, COUNT(*) FROM own_contact_versions GROUP BY address")}
 
     @staticmethod
     def _card(row, kept=None):
@@ -242,30 +228,22 @@ class OwnContacts:
                 "created": row["created"], "updated": row["updated"]}
 
     def all(self):
-        """Every card, by name. An unreadable or absent file has none."""
-        if not self.path.exists():
-            return []
-        # Read without creating anything: an MCP process reads here too.
-        con = sqlite3.connect(self.path, timeout=5)
-        con.row_factory = sqlite3.Row
-        try:
-            # No table yet is no card. Anything else – a file that is
-            # locked, one that is no database – is an error and says so:
-            # "none" would make the cards disappear from the page.
-            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                           "AND name = 'own_contacts'").fetchone() is None:
-                return []
-            kept = self._kept(con)
-            return [self._card(r, kept) for r in con.execute(
-                "SELECT * FROM own_contacts ORDER BY name COLLATE NOCASE, address")]
-        finally:
-            con.close()
+        """Every card, by name. Reads without creating anything – an MCP
+        process reads here too; no file or table is no card, a locked file
+        an error ("none" would make the cards disappear from the page)."""
+        cards = profile_db.rows(self.path, "SELECT * FROM own_contacts ORDER BY name COLLATE NOCASE, address")
+        kept = self._kept() if cards else {}
+        return [self._card(r, kept) for r in cards]
 
     def one(self, ident):
         con = self._connect()
         try:
             row = con.execute("SELECT * FROM own_contacts WHERE id = ?", (ident,)).fetchone()
-            return self._card(row, self._kept(con)) if row else None
+            if row is None:
+                return None
+            kept = con.execute("SELECT COUNT(*) FROM own_contact_versions WHERE address = ?",
+                               (row["address"],)).fetchone()[0]
+            return self._card(row, {row["address"]: kept})
         finally:
             con.close()
 
@@ -372,16 +350,7 @@ class OwnContacts:
     # -- the addresses not to be offered for the address book ----------------
     def ignored(self):
         """The ignored addresses, sorted. Reads without creating anything."""
-        if not self.path.exists():
-            return []
-        con = sqlite3.connect(self.path, timeout=5)
-        try:
-            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                           "AND name = 'ignored_contacts'").fetchone() is None:
-                return []
-            return [row[0] for row in con.execute("SELECT address FROM ignored_contacts ORDER BY address")]
-        finally:
-            con.close()
+        return [row[0] for row in profile_db.rows(self.path, "SELECT address FROM ignored_contacts ORDER BY address")]
 
     def ignore(self, address, on=True):
         """Set an address to be ignored, or (`on` False) no longer."""
@@ -400,16 +369,7 @@ class OwnContacts:
     # (a chat partner, a system's sender name) is ignored by its name.
     def ignored_names(self):
         """The ignored names, sorted. Reads without creating anything."""
-        if not self.path.exists():
-            return []
-        con = sqlite3.connect(self.path, timeout=5)
-        try:
-            if con.execute("SELECT 1 FROM sqlite_master WHERE type = 'table' "
-                           "AND name = 'ignored_names'").fetchone() is None:
-                return []
-            return [row[0] for row in con.execute("SELECT name FROM ignored_names ORDER BY name")]
-        finally:
-            con.close()
+        return [row[0] for row in profile_db.rows(self.path, "SELECT name FROM ignored_names ORDER BY name")]
 
     def ignore_name(self, name, on=True):
         """Set a name to be ignored, or (`on` False) no longer."""

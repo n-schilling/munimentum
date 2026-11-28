@@ -114,13 +114,18 @@ def test_the_file_browser_lists_every_mirror_and_walks_into_one(archive_page, ar
     expect(liste).to_contain_text("Dateien")
     liste.get_by_text("Dateien", exact=False).first.click()
     expect(liste).to_contain_text("Documents")
+    # What was added by hand is no mirror, but its plain file is a file of the archive: an entry of its own.
+    archive_page.locator("#dateien-pfad a").first.click()
+    liste.get_by_text("Added by hand", exact=True).click()
+    expect(liste).to_contain_text(sources.upload_rel("file").rsplit("/", 1)[1])
 
 
 def test_the_key_figures_count_what_was_written(archive_page, archive):
     open_app(archive_page, archive, tab="analytics")
     karte = archive_page.locator("#ana-zahlen-karte")
     expect(karte).to_be_visible()
-    messages = len(sources.MAILS) + sum(len(c["messages"]) for c in sources.CONVERSATIONS)
+    messages = (len(sources.MAILS) + sources.UPLOADED_MAILS          # … and the mail added by hand
+                + sum(len(c["messages"]) for c in sources.CONVERSATIONS))
     expect(karte).to_contain_text(figure(messages))
     expect(karte).to_contain_text(figure(len(sources.PAGES)))
     expect(karte).to_contain_text(figure(len(sources.ONENOTE_PAGES)))
@@ -503,3 +508,83 @@ def test_the_organization_overview_opens_on_demand_and_leads_to_the_changes(arch
     changes = page.locator("#org-changes-fold")
     expect(changes).to_have_attribute("open", "")
     expect(changes).to_contain_text(en["org.changes.all"])
+
+
+def test_files_are_staged_in_the_window_that_adds_them_by_hand(archive_page, archive):
+    """Build archive has a card for what does not come from Microsoft. Its
+    window takes files, says what each is read as, asks a plain file for
+    the words it will be found by – and drops what is taken out again.
+    (Adding starts a run; the tests of uploads.py take it from there.)"""
+    open_app(archive_page, archive)
+    card = archive_page.locator("#qk-upload")
+    expect(card).to_contain_text(EN["upload.source"])
+    card.get_by_role("button", name=EN["upload.add"]).click()
+    window = archive_page.locator("#modal")
+    expect(window).to_contain_text(EN["upload.empty"])
+    add = window.get_by_role("button", name=EN["upload.go"])
+    expect(add).to_be_disabled()
+    with archive_page.expect_response(lambda r: "/api/v1/uploads/staged" in r.url and r.request.method == "PUT"):
+        archive_page.set_input_files("#upload-files", [
+            {"name": "letter.eml", "mimeType": "message/rfc822",
+             "buffer": b"From: Dana Dienstleister <dana@example.com>\r\nSubject: Handed over on paper\r\n"
+                       b"Date: Tue, 02 Jun 2026 09:00:00 +0000\r\n\r\nWords.\r\n"},
+            {"name": "Scan contract.pdf", "mimeType": "application/pdf", "buffer": b"%PDF-1.4 a scan"}])
+    items = window.locator(".upload-item")
+    expect(items).to_have_count(2)
+    # A mail is read as one: what it says itself is shown, not asked for.
+    mail = items.filter(has_text="letter.eml")
+    expect(mail.locator(".tag")).to_have_text(EN["upload.kind.mail"])
+    expect(mail).to_contain_text("Handed over on paper")
+    expect(mail.locator("input")).to_have_count(0)
+    # A plain file asks for what the search will find it by, its name as the title to start with.
+    scan = items.filter(has_text="Scan contract.pdf")
+    expect(scan.locator(".tag")).to_have_text(EN["upload.kind.file"])
+    # … all of it optional: a closed fold on the card, said to be so.
+    details = scan.locator("details.upload-details")
+    expect(details.locator("summary")).to_contain_text(EN["upload.optional"])
+    expect(scan.locator("input[type=text]").first).to_be_hidden()
+    details.locator("summary").click()
+    expect(scan.locator("input[type=text]").first).to_have_value("Scan contract")
+    # People: the archive's names are offered as they are written there; another name is simply new.
+    who = scan.locator("input[role=combobox]")
+    who.press_sequentially("Dana Di")
+    offered = scan.locator(".wahlliste button")
+    expect(offered.first).to_contain_text("Dana Dienstleister")
+    expect(offered.last).to_contain_text(EN["upload.people.new"].format(name="Dana Di"))
+    offered.first.click()
+    expect(who).to_have_value("Dana Dienstleister, ")
+    expect(scan.locator(".wahlliste")).to_be_hidden()
+    who.press_sequentially("Nora Neu")
+    expect(offered.last).to_contain_text(EN["upload.people.new"].format(name="Nora Neu"))
+    # Esc closes the list, not the window.
+    who.press("Escape")
+    expect(scan.locator(".wahlliste")).to_be_hidden()
+    expect(window).to_be_visible()
+    scan.locator("textarea").fill("Two pages, signed.")
+    expect(add).to_be_enabled()
+    # The note stands first: one for all files, or – chosen there – a field at the foot of every file.
+    notes = window.locator(".upload-note-block")
+    expect(notes.locator("#upload-note-all")).to_be_hidden()
+    notes.locator("summary").click()
+    notes.locator("#upload-note-all").fill("Both from the landlord.")
+    expect(items.locator(".upload-note")).to_have_count(0)
+    notes.get_by_role("button", name=EN["upload.note.each"], exact=True).click()
+    expect(notes).to_contain_text(EN["upload.note.each.hint"])
+    expect(notes.locator("#upload-note-all")).to_have_count(0)
+    expect(items.locator(".upload-note textarea")).to_have_count(2)
+    notes.get_by_role("button", name=EN["upload.note.all"], exact=True).click()
+    expect(notes.locator("#upload-note-all")).to_have_value("Both from the landlord.")
+    # Taken out again: the staged file is dropped, what was typed for the other stays.
+    with archive_page.expect_response(lambda r: "/api/v1/uploads/staged/" in r.url and r.request.method == "DELETE"):
+        mail.get_by_role("button", name=EN["upload.remove"]).click()
+    expect(items).to_have_count(1)
+    # … and its fold stays open, as it was.
+    expect(items.locator("textarea")).to_be_visible()
+    expect(items.locator("textarea")).to_have_value("Two pages, signed.")
+    # One file left: one note, no choice.
+    expect(notes.locator(".upload-note-mode")).to_have_count(0)
+    expect(notes.locator("#upload-note-all")).to_have_value("Both from the landlord.")
+    with archive_page.expect_response(lambda r: "/api/v1/uploads/staged/" in r.url and r.request.method == "DELETE"):
+        items.get_by_role("button", name=EN["upload.remove"]).click()
+    expect(window).to_contain_text(EN["upload.empty"])
+    expect(add).to_be_disabled()

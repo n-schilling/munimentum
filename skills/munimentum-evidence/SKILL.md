@@ -5,7 +5,7 @@ description: Use when the user needs something they can rely on from their Munim
 
 # Evidence from a Munimentum archive
 
-This guide belongs to Munimentum 15.3.0. Installed by hand – under
+This guide belongs to Munimentum 16.0.0. Installed by hand – under
 Customize › Skills or in `~/.claude/skills/` – it does not change with the
 app: `get_guide` (and `get_version`) answer the server's `version`; when
 it differs from this one, follow the guide `get_guide` hands you instead.
@@ -84,6 +84,12 @@ file is checked, and `item_sha256` is the checksum of the item's own words.
 
 When `get_document` lists more than one entry in `versions`, the item
 changed after it was archived: say which version a quote comes from.
+
+An item whose root is "uploads" was added to the archive by hand, not
+fetched from Microsoft 365. The chain vouches for it from the moment it
+was added – that the file is unchanged since – never for where it came
+from, nor that it is what its title and description say. Word it so:
+"a file the user added on <date>", not "the original".
 
 ## Citing and handing over
 

@@ -249,6 +249,7 @@ def _index_argv(cfg, ctx, pfade):
             "--pages", pfade["sharepoint_pages"],
             "--planner", pfade["planner"],
             "--todo", pfade["todo"], "--onenote", pfade["onenote"],
+            "--uploads", pfade[store_layout.UPLOADS_ROOT],
             "--store", pfade["store"],
             "--model", cfg["embed_model"], "--ollama", cfg["ollama"],
             "--batch", cfg.get("index_batch", 128)]
@@ -258,7 +259,7 @@ def _index_argv(cfg, ctx, pfade):
 
 
 def _calendar_argv(cfg, ctx, pfade):
-    argv = [pfade["outlook"], "--json", pfade["calendar_json"]]
+    argv = [pfade["outlook"], "--json", pfade["calendar_json"], "--uploads", pfade[store_layout.UPLOADS_ROOT]]
     if not ctx["reconstruct"]:
         argv.append("--no-reconstruct")
     return argv
@@ -270,7 +271,8 @@ def _archiv_pfade(pfade):
     return [pfade["teams"], pfade["outlook"], pfade["onedrive"],
             "--sharepoint", pfade["sharepoint"], "--pages", pfade["sharepoint_pages"],
             "--planner", pfade["planner"], "--todo", pfade["todo"],
-            "--onenote", pfade["onenote"], "--store", pfade["store"],
+            "--onenote", pfade["onenote"], "--uploads", pfade[store_layout.UPLOADS_ROOT],
+            "--store", pfade["store"],
             "--report", pfade["archiv_bericht"], "--data", pfade.get("data") or ""]
 
 
@@ -293,7 +295,7 @@ def _fall_export_argv(cfg, ctx, pfade):
     out = [pfade["teams"], pfade["outlook"], pfade["onedrive"],
            "--sharepoint", pfade["sharepoint"], "--pages", pfade["sharepoint_pages"],
            "--planner", pfade["planner"], "--todo", pfade["todo"],
-           "--onenote", pfade["onenote"],
+           "--onenote", pfade["onenote"], "--uploads", pfade[store_layout.UPLOADS_ROOT],
            "--faelle", str(f.get("faelle") or ""), "--fall", str(f.get("fall") or 0),
            "--ziel", str(f.get("ziel") or ""), "--lang", str(f.get("lang") or "de"),
            "--data", pfade.get("data") or ""]
@@ -319,7 +321,7 @@ def _evidence_argv(cfg, ctx, pfade):
     """evidence.py: every export folder, and the data folder the chain
     and the versions lie in."""
     return [pfade[k] for k in ("outlook", "teams", "onedrive", "sharepoint",
-                               "sharepoint_pages", "planner", "todo", "onenote")] + \
+                               "sharepoint_pages", "planner", "todo", "onenote", store_layout.UPLOADS_ROOT)] + \
         ["--data", pfade["data"]]
 
 
@@ -428,6 +430,17 @@ REGISTRY = (
      "quelle": "export.org",
      "argv": lambda cfg, ctx, pfade: [pfade["teams"]],
      "env": _org_env},
+
+    # What the keeper adds by hand (uploads.py): the staged files go into
+    # their own folder through versions.py. No Microsoft; counted like an
+    # export, so the chain, the index and the calendar follow only when
+    # it brought something.
+    {"key": "upload", "anfrage": "upload", "script": "uploads",
+     "start": "job.start.upload", "label": "job.step.upload",
+     "corpus": True, "zugang": False, "schedule": None, "master": None,
+     "quelle": "upload.source",
+     "argv": lambda cfg, ctx, pfade: [pfade[store_layout.UPLOADS_ROOT], "--staging", str((ctx.get("upload") or {}).get("home") or "")],
+     "env": lambda cfg, ctx: {}},
 
     # The evidence chain (evidence.py): after the exports, before the
     # index – what the exports wrote is chained, what changed without them
